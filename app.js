@@ -91,12 +91,14 @@ const fsSource = `
     const int FILTER_GRAYSCALE = 1;
     const int FILTER_INVERT = 2;
     const int FILTER_SEPIA = 3;
-    const int FILTER_ECO_PINK = 4;
-    const int FILTER_WEIRD = 5;
-    const int FILTER_GLOW_OUTLINE = 6;
-    const int FILTER_ANGELICAL_GLITCH = 7;
-    const int FILTER_AUDIO_COLOR_SHIFT = 8;
-    const int FILTER_MODULAR_COLOR_SHIFT = 9; // Nuevo filtro
+    const int FILTER_MIRROR = 4; // Nuevo filtro Espejo
+    const int FILTER_ECO_PINK = 5;
+    const int FILTER_WEIRD = 6;
+    const int FILTER_AUDIO_COLOR_SHIFT = 7;
+    const int FILTER_GLOW_OUTLINE = 8;
+    const int FILTER_ANGELICAL_GLITCH = 9;
+    const int FILTER_MODULAR_COLOR_SHIFT = 10; // Nuevo filtro
+
 
     // Función para generar ruido básico (copiada de tu fragShader anterior)
     float random(vec2 st) {
@@ -130,7 +132,14 @@ const fsSource = `
             finalColor.g = (r * 0.349) + (g * 0.686) + (b * 0.168);
             finalColor.b = (r * 0.272) + (g * 0.534) + (b * 0.131);
             finalColor = clamp(finalColor, 0.0, 1.0);
-        } else if (u_filterType == FILTER_ECO_PINK) {
+        } else if (u_filterType == FILTER_MIRROR) { // Lógica del nuevo filtro Espejo
+            vec2 mirrorTexCoord = texCoord;
+            if (texCoord.x > 0.5) {
+                mirrorTexCoord.x = 1.0 - texCoord.x;
+            }
+            finalColor = texture2D(u_image, mirrorTexCoord).rgb;
+        }
+        else if (u_filterType == FILTER_ECO_PINK) {
             float brightness = (color.r + color.g + color.b) / 3.0;
             if (brightness < 0.3137) {
                 finalColor.r = min(1.0, color.r + (80.0/255.0));
@@ -147,6 +156,8 @@ const fsSource = `
             } else if (brightness < 0.3921) {
                 finalColor *= 0.5;
             }
+        } else if (u_filterType == FILTER_AUDIO_COLOR_SHIFT) { 
+            finalColor = mod(color.rgb + u_colorShift, 1.0);
         } else if (u_filterType == FILTER_GLOW_OUTLINE) {
             vec2 onePixel = vec2(1.0, 1.0) / u_resolution;
             float distortionFactor = 0.005;
@@ -195,8 +206,6 @@ const fsSource = `
                 finalColor = distorted.rgb;
             }
             alpha = col.a;
-        } else if (u_filterType == FILTER_AUDIO_COLOR_SHIFT) { 
-            finalColor = mod(color.rgb + u_colorShift, 1.0);
         } else if (u_filterType == FILTER_MODULAR_COLOR_SHIFT) { // Lógica del nuevo filtro "Modular Color Shift"
             // Paletas de color (normalizadas de 0-255 a 0-1)
             const vec3 palette0 = vec3(80.0/255.0, 120.0/255.0, 180.0/255.0); // Graves
@@ -522,12 +531,13 @@ function drawVideoFrame() {
         case 'grayscale': filterIndex = 1; break; // FILTER_GRAYSCALE
         case 'invert': filterIndex = 2; break;    // FILTER_INVERT
         case 'sepia': filterIndex = 3; break;     // FILTER_SEPIA
-        case 'eco-pink': filterIndex = 4; break;  // FILTER_ECO_PINK
-        case 'weird': filterIndex = 5; break;     // FILTER_WEIRD
-        case 'glow-outline': filterIndex = 6; break; // Filtro Glow con contorno
-        case 'angelical-glitch': filterIndex = 7; break; // Filtro Angelical Glitch
-        case 'audio-color-shift': filterIndex = 8; break; // Filtro Audio Color Shift
-        case 'modular-color-shift': filterIndex = 9; break; // Nuevo filtro Modular Color Shift
+        case 'mirror': filterIndex = 4; break;    // FILTER_MIRROR (Nuevo filtro)
+        case 'eco-pink': filterIndex = 5; break;  // FILTER_ECO_PINK
+        case 'weird': filterIndex = 6; break;     // FILTER_WEIRD
+        case 'audio-color-shift': filterIndex = 7; break; // Filtro Audio Color Shift
+        case 'glow-outline': filterIndex = 8; break; // Filtro Glow con contorno
+        case 'angelical-glitch': filterIndex = 9; break; // Filtro Angelical Glitch
+        case 'modular-color-shift': filterIndex = 10; break; // Nuevo filtro Modular Color Shift
         default: filterIndex = 0; break;
     }
     gl.uniform1i(filterTypeLocation, filterIndex);
