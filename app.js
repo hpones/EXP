@@ -4,7 +4,7 @@ let canvas = document.getElementById('canvas'); // Para la captura de imágenes 
 let filterSelect = document.getElementById('filterSelect');
 let captureBtn = document.getElementById('capture-button');
 let recordBtn = document.getElementById('record-button');
-let pauseBtn = document.getElementById('pause-button');
+let pauseBtn = document = document.getElementById('pause-button');
 let stopBtn = document.getElementById('stop-button');
 let fullscreenBtn = document.getElementById('fullscreen-button');
 let filterBtn = document.getElementById('filter-button');
@@ -355,36 +355,49 @@ function initWebGL() {
 let availableCameraDevices = [];
 
 async function listCameras() {
+  console.log('listCameras: Iniciando listado de cámaras...');
   try {
+    // Solicitamos permisos de antemano para que enumerateDevices funcione correctamente.
+    // Esto es un truco común, ya que algunos navegadores no listan todos los dispositivos
+    // hasta que se ha dado permiso a al menos uno.
+    await navigator.mediaDevices.getUserMedia({ video: true, audio: false })
+        .then(stream => {
+            stream.getTracks().forEach(track => track.stop()); // Detener el stream de prueba
+            console.log('listCameras: Permisos de cámara obtenidos.');
+        })
+        .catch(err => {
+            console.warn('listCameras: Error al obtener permisos de cámara (puede ser ignorado si el usuario deniega):', err);
+        });
+
     const devices = await navigator.mediaDevices.enumerateDevices();
     const videoDevices = devices.filter(device => device.kind === 'videoinput');
 
     availableCameraDevices = videoDevices;
-    console.log('Cámaras disponibles:', availableCameraDevices);
-    console.log('Número de cámaras disponibles:', availableCameraDevices.length);
+    console.log('listCameras: Cámaras disponibles:', availableCameraDevices);
+    console.log('listCameras: Número de cámaras disponibles:', availableCameraDevices.length);
     
     if (availableCameraDevices.length > 0) {
       // Si no hay una cámara actual o la cámara actual ya no está disponible, selecciona la primera
       if (!currentCameraDeviceId || !availableCameraDevices.some(d => d.deviceId === currentCameraDeviceId)) {
         currentCameraDeviceId = availableCameraDevices[0].deviceId;
-        console.log('Cámara inicial seleccionada:', currentCameraDeviceId);
+        console.log('listCameras: Cámara inicial seleccionada:', currentCameraDeviceId);
       }
       startCamera(currentCameraDeviceId);
     } else {
       alert('No se encontraron dispositivos de cámara.');
-      console.warn('No se encontraron dispositivos de cámara.');
+      console.warn('listCameras: No se encontraron dispositivos de cámara.');
     }
   } catch (err) {
-    console.error('Error al listar dispositivos de cámara:', err);
+    console.error('listCameras: Error al listar dispositivos de cámara:', err);
     alert('Error al listar dispositivos de cámara. Revisa los permisos.');
   }
 }
 
 async function startCamera(deviceId) {
-  console.log('Intentando iniciar cámara con Device ID:', deviceId);
+  console.log('startCamera: Intentando iniciar cámara con Device ID:', deviceId);
   if (currentStream) {
     currentStream.getTracks().forEach(track => track.stop());
-    console.log('Stream anterior detenido.');
+    console.log('startCamera: Stream anterior detenido.');
   }
 
   const constraints = {
@@ -399,12 +412,12 @@ async function startCamera(deviceId) {
   try {
     currentStream = await navigator.mediaDevices.getUserMedia(constraints);
     video.srcObject = currentStream;
-    currentCameraDeviceId = deviceId || currentStream.getVideoTracks()[0].getSettings().deviceId;
-
+    
     const videoTrack = currentStream.getVideoTracks()[0];
     const settings = videoTrack.getSettings();
+    currentCameraDeviceId = settings.deviceId; // Actualizar con el deviceId real usado
     currentFacingMode = settings.facingMode || 'unknown';
-    console.log('Cámara actual - Device ID:', currentCameraDeviceId, 'Facing Mode:', currentFacingMode);
+    console.log('startCamera: Cámara actual - Device ID:', currentCameraDeviceId, 'Facing Mode:', currentFacingMode);
 
     // --- Web Audio API setup ---
     if (currentStream.getAudioTracks().length > 0) {
@@ -413,12 +426,13 @@ async function startCamera(deviceId) {
             analyser = audioContext.createAnalyser();
             analyser.fftSize = 256; // Un tamaño de FFT más pequeño para una respuesta más rápida
             dataArray = new Uint8Array(analyser.frequencyBinCount);
-            console.log('AudioContext y Analyser inicializados.');
+            console.log('startCamera: AudioContext y Analyser inicializados.');
         }
 
         // Desconectar el micrófono anterior si existe
         if (microphone) {
             microphone.disconnect();
+            console.log('startCamera: Micrófono anterior desconectado.');
         }
 
         // Conectar la nueva fuente de audio
@@ -426,9 +440,9 @@ async function startCamera(deviceId) {
         audioSource.connect(analyser);
         // analyser.connect(audioContext.destination); // Opcional: para escuchar el audio del micrófono
         microphone = audioSource; // Guardar la referencia
-        console.log('Micrófono conectado al Analyser.');
+        console.log('startCamera: Micrófono conectado al Analyser.');
     } else {
-        console.warn('No se encontró pista de audio en el stream de la cámara.');
+        console.warn('startCamera: No se encontró pista de audio en el stream de la cámara.');
         // Limpiar recursos de audio si no hay pista de audio disponible
         if (microphone) {
             microphone.disconnect();
@@ -443,26 +457,26 @@ async function startCamera(deviceId) {
 
     video.onloadedmetadata = () => {
       video.play();
-      console.log('Video metadata cargada y reproduciendo.');
+      console.log('startCamera: Video metadata cargada y reproduciendo.');
       if (glcanvas.width !== video.videoWidth || glcanvas.height !== video.videoHeight) {
         glcanvas.width = video.videoWidth;
         glcanvas.height = video.videoHeight;
-        console.log('Canvas WebGL redimensionado a:', glcanvas.width, 'x', glcanvas.height);
+        console.log('startCamera: Canvas WebGL redimensionado a:', glcanvas.width, 'x', glcanvas.height);
         if (gl) {
           gl.viewport(0, 0, glcanvas.width, glcanvas.height);
-          console.log('Viewport de WebGL actualizado.');
+          console.log('startCamera: Viewport de WebGL actualizado.');
         }
       }
       // Inicializar WebGL solo una vez que el video esté listo y si no se ha inicializado ya
       if (!gl) {
         initWebGL();
-        console.log('WebGL inicializado tras cargar video.');
+        console.log('startCamera: WebGL inicializado tras cargar video.');
       }
       drawVideoFrame();
-      console.log('Bucle de renderizado WebGL iniciado.');
+      console.log('startCamera: Bucle de renderizado WebGL iniciado.');
     };
   } catch (err) {
-    console.error('No se pudo acceder a la cámara/micrófono:', err);
+    console.error('startCamera: No se pudo acceder a la cámara/micrófono:', err);
     alert('No se pudo acceder a la cámara/micrófono. Revisa los permisos. Error: ' + err.name);
   }
 }
@@ -631,10 +645,11 @@ filterBtn.addEventListener('click', () => {
   console.log('Toggle de dropdown de filtros.');
 });
 
+// Este manejador de eventos se mantiene para la selección manual
 filterSelect.addEventListener('change', () => {
   selectedFilter = filterSelect.value;
   filtersDropdown.style.display = 'none';
-  console.log('Filtro seleccionado:', selectedFilter);
+  console.log('Filtro seleccionado manualmente:', selectedFilter);
 });
 
 fullscreenBtn.addEventListener('click', () => {
@@ -739,7 +754,7 @@ function toggleCamera() {
         );
         const nextIdx = (currentIdx + 1) % availableCameraDevices.length;
         const nextDeviceId = availableCameraDevices[nextIdx].deviceId;
-        console.log('Cambiando de cámara. Actual:', currentCameraDeviceId, 'Siguiente:', nextDeviceId);
+        console.log('Cambiando de cámara. Actual Device ID:', currentCameraDeviceId, 'Siguiente Device ID:', nextDeviceId);
         startCamera(nextDeviceId);
     } else {
         console.log("Solo hay una cámara disponible para cambiar.");
@@ -752,6 +767,48 @@ function changePaletteIndex() {
     paletteIndex = (paletteIndex + 1) % palettes.length;
     console.log('Paleta cambiada a índice:', paletteIndex, ' Color:', palettes[paletteIndex]);
 }
+
+// --- LÓGICA DE SWIPE PARA CAMBIAR FILTROS ---
+let touchStartX = 0;
+let touchEndX = 0;
+const SWIPE_THRESHOLD = 50; // Pixeles mínimos para considerar un swipe
+
+glcanvas.addEventListener('touchstart', (e) => {
+    touchStartX = e.touches[0].clientX;
+    console.log('Swipe: touchstart en X:', touchStartX);
+});
+
+glcanvas.addEventListener('touchmove', (e) => {
+    touchEndX = e.touches[0].clientX;
+    // Opcional: para depuración, muestra el movimiento
+    // console.log('Swipe: touchmove en X:', touchEndX);
+});
+
+glcanvas.addEventListener('touchend', () => {
+    console.log('Swipe: touchend. StartX:', touchStartX, 'EndX:', touchEndX);
+    const diffX = touchEndX - touchStartX;
+
+    if (Math.abs(diffX) > SWIPE_THRESHOLD) {
+        const options = Array.from(filterSelect.options).map(option => option.value);
+        let currentIndex = options.indexOf(selectedFilter);
+
+        if (diffX > 0) { // Swipe a la derecha
+            currentIndex = (currentIndex > 0) ? currentIndex - 1 : options.length - 1;
+            console.log('Swipe a la derecha. Nuevo índice de filtro:', currentIndex);
+        } else { // Swipe a la izquierda
+            currentIndex = (currentIndex < options.length - 1) ? currentIndex + 1 : 0;
+            console.log('Swipe a la izquierda. Nuevo índice de filtro:', currentIndex);
+        }
+        
+        selectedFilter = options[currentIndex];
+        filterSelect.value = selectedFilter; // Sincroniza el select
+        console.log('Filtro cambiado por swipe a:', selectedFilter);
+        // Opcional: mostrar un feedback visual del filtro actual
+    }
+    // Reiniciar valores de touch
+    touchStartX = 0;
+    touchEndX = 0;
+});
 
 // Iniciar el proceso de listar cámaras y obtener el stream
 listCameras();
