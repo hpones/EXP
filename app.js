@@ -4,7 +4,7 @@ let canvas = document.getElementById('canvas'); // Para la captura de imágenes 
 let filterSelect = document.getElementById('filterSelect');
 let captureBtn = document.getElementById('capture-button');
 let recordBtn = document.getElementById('record-button');
-let pauseBtn = document.getElementById('pause-button');
+let pauseBtn = document = document.getElementById('pause-button');
 let stopBtn = document.getElementById('stop-button');
 let fullscreenBtn = document.getElementById('fullscreen-button');
 let filterBtn = document.getElementById('filter-button');
@@ -13,12 +13,6 @@ let gallery = document.getElementById('gallery');
 let controls = document.getElementById('controls');
 let recordingControls = document.getElementById('recording-controls');
 let cameraContainer = document.getElementById('camera-container'); // Necesario para fullscreen
-
-// Elementos del modal de previsualización
-let previewModal = document.getElementById('preview-modal');
-let previewContent = document.getElementById('preview-content');
-let closePreviewBtn = document.getElementById('close-preview-button');
-
 
 let currentStream;
 let mediaRecorder;
@@ -551,7 +545,7 @@ function drawVideoFrame() {
         case 'grayscale': filterIndex = 1; break; // FILTER_GRAYSCALE
         case 'invert': filterIndex = 2; break;    // FILTER_INVERT
         case 'sepia': filterIndex = 3; break;     // FILTER_SEPIA
-        case 'mirror': filterIndex = 4; break;    // FILTER_MIRROR
+        case 'mirror': filterIndex = 4; break;    // FILTER_MIRROR (Nuevo filtro)
         case 'eco-pink': filterIndex = 5; break;  // FILTER_ECO_PINK
         case 'weird': filterIndex = 6; break;     // FILTER_WEIRD
         case 'audio-color-shift': filterIndex = 7; break; // Filtro Audio Color Shift
@@ -673,24 +667,11 @@ function addToGallery(element, type) {
   container.className = 'gallery-item';
   container.appendChild(element);
 
-  // Event listener para abrir el modal al hacer clic en el elemento de la galería
-  element.addEventListener('click', () => {
-      previewContent.innerHTML = ''; // Limpiar contenido previo
-      let clonedElement = element.cloneNode(true);
-      if (type === 'video') {
-          clonedElement.controls = true; // Asegurarse de que el video tenga controles en la previsualización
-          clonedElement.play(); // Iniciar reproducción automáticamente en el modal
-      }
-      previewContent.appendChild(clonedElement);
-      previewModal.style.display = 'flex'; // Mostrar el modal
-      console.log('Abriendo previsualización de', type);
-  });
-
   let actions = document.createElement('div');
   actions.className = 'gallery-actions';
 
   let downloadBtn = document.createElement('button');
-  downloadBtn.textContent = '⬇︎'; // Símbolo para Descargar
+  downloadBtn.textContent = 'Descargar';
   downloadBtn.onclick = () => {
     const a = document.createElement('a');
     a.href = element.src;
@@ -700,7 +681,7 @@ function addToGallery(element, type) {
   };
 
   let shareBtn = document.createElement('button');
-  shareBtn.textContent = '✉︎'; // Símbolo para Compartir
+  shareBtn.textContent = 'Compartir';
   shareBtn.onclick = async () => {
     if (navigator.share) {
       try {
@@ -724,7 +705,7 @@ function addToGallery(element, type) {
   };
 
   let deleteBtn = document.createElement('button');
-  deleteBtn.textContent = '✖︎'; // Símbolo para Eliminar
+  deleteBtn.textContent = 'Eliminar';
   deleteBtn.onclick = () => {
     if (type === 'video' && element.src.startsWith('blob:')) {
       URL.revokeObjectURL(element.src);
@@ -742,19 +723,6 @@ function addToGallery(element, type) {
 
   gallery.prepend(container); // Añadir al principio de la galería
 }
-
-// Cierra el modal de previsualización
-closePreviewBtn.addEventListener('click', () => {
-    previewModal.style.display = 'none';
-    // Si el contenido previsualizado es un video, pausarlo al cerrar
-    const videoInPreview = previewContent.querySelector('video');
-    if (videoInPreview) {
-        videoInPreview.pause();
-        videoInPreview.currentTime = 0; // Opcional: reiniciar el video
-    }
-    console.log('Cerrando previsualización.');
-});
-
 
 // --- LÓGICA DE DOBLE TAP/CLICK PARA CAMBIAR DE CÁMARA ---
 let lastTap = 0;
