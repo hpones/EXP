@@ -14,10 +14,10 @@ let controls = document.getElementById('controls');
 let recordingControls = document.getElementById('recording-controls');
 let cameraContainer = document.getElementById('camera-container'); // Necesario para fullscreen
 
-// Elementos del modal de previsualización
-let previewModal = document.getElementById('preview-modal');
-let previewContent = document.getElementById('preview-content');
-let closePreviewBtn = document.getElementById('close-preview-button');
+// Elementos del modal de previsualización (se eliminan o se ignoran, ya no se usan)
+// let previewModal = document.getElementById('preview-modal');
+// let previewContent = document.getElementById('preview-content');
+// let closePreviewBtn = document.getElementById('close-preview-button');
 
 
 let currentStream;
@@ -363,7 +363,7 @@ let availableCameraDevices = [];
 async function listCameras() {
   console.log('listCameras: Iniciando listado de cámaras...');
   try {
-    // Solicitamos permisos de antemano para que enumerateDevices funcione correctamente.
+    // Solicitamos permisos de antemano para que enumeraDevices funcione correctamente.
     // Esto es un truco común, ya que algunos navegadores no listan todos los dispositivos
     // hasta que se ha dado permiso a al menos uno.
     await navigator.mediaDevices.getUserMedia({ video: true, audio: false })
@@ -431,6 +431,7 @@ async function startCamera(deviceId) {
             audioContext = new (window.AudioContext || window.webkitAudioContext)();
             analyser = audioContext.createAnalyser();
             analyser.fftSize = 256; // Un tamaño de FFT más pequeño para una respuesta más rápida
+            analyser.smoothingTimeConstant = 0.7; // Suaviza la lectura
             dataArray = new Uint8Array(analyser.frequencyBinCount);
             console.log('startCamera: AudioContext y Analyser inicializados.');
         }
@@ -673,18 +674,69 @@ function addToGallery(element, type) {
   container.className = 'gallery-item';
   container.appendChild(element);
 
-  // Event listener para abrir el modal al hacer clic en el elemento de la galería
+  // Event listener para abrir la ventana de previsualización al hacer clic
   element.addEventListener('click', () => {
-      previewContent.innerHTML = ''; // Limpiar contenido previo
-      let clonedElement = element.cloneNode(true);
-      if (type === 'video') {
-          clonedElement.controls = true; // Asegurarse de que el video tenga controles en la previsualización
-          clonedElement.play(); // Iniciar reproducción automáticamente en el modal
-      }
-      previewContent.appendChild(clonedElement);
-      previewModal.style.display = 'flex'; // Mostrar el modal
-      console.log('Abriendo previsualización de', type);
-  });
+        console.log('Creando ventana de previsualización de', type);
+        const previewWindow = document.createElement('div');
+        previewWindow.className = 'preview-window';
+        document.body.appendChild(previewWindow);
+
+        const closeButton = document.createElement('span');
+        closeButton.textContent = '✖';
+        closeButton.className = 'close-preview-window-button';
+        previewWindow.appendChild(closeButton);
+
+        const clonedElement = element.cloneNode(true);
+        if (type === 'video') {
+            clonedElement.controls = true;
+            clonedElement.play();
+        }
+        previewWindow.appendChild(clonedElement);
+
+        // Event listener para cerrar la ventana
+        closeButton.addEventListener('click', () => {
+            if (type === 'video') {
+                clonedElement.pause();
+                clonedElement.currentTime = 0;
+            }
+            previewWindow.remove();
+            console.log('Ventana de previsualización cerrada.');
+        });
+
+        // Hacer la ventana arrastrable
+        let pos1 = 0, pos2 = 0, pos3 = 0, pos4 = 0;
+        previewWindow.onmousedown = dragMouseDown;
+
+        function dragMouseDown(e) {
+            e = e || window.event;
+            e.preventDefault();
+            // obtener la posición del cursor en el inicio:
+            pos3 = e.clientX;
+            pos4 = e.clientY;
+            document.onmouseup = closeDragElement;
+            // llamar a una función cada vez que el cursor se mueve:
+            document.onmousemove = elementDrag;
+        }
+
+        function elementDrag(e) {
+            e = e || window.event;
+            e.preventDefault();
+            // calcular la nueva posición del cursor:
+            pos1 = pos3 - e.clientX;
+            pos2 = pos4 - e.clientY;
+            pos3 = e.clientX;
+            pos4 = e.clientY;
+            // establecer la nueva posición del elemento:
+            previewWindow.style.top = (previewWindow.offsetTop - pos2) + "px";
+            previewWindow.style.left = (previewWindow.offsetLeft - pos1) + "px";
+        }
+
+        function closeDragElement() {
+            /* dejar de moverse cuando se suelta el botón del ratón: */
+            document.onmouseup = null;
+            document.onmousemove = null;
+        }
+    });
 
   let actions = document.createElement('div');
   actions.className = 'gallery-actions';
@@ -742,18 +794,6 @@ function addToGallery(element, type) {
 
   gallery.prepend(container); // Añadir al principio de la galería
 }
-
-// Cierra el modal de previsualización
-closePreviewBtn.addEventListener('click', () => {
-    previewModal.style.display = 'none';
-    // Si el contenido previsualizado es un video, pausarlo al cerrar
-    const videoInPreview = previewContent.querySelector('video');
-    if (videoInPreview) {
-        videoInPreview.pause();
-        videoInPreview.currentTime = 0; // Opcional: reiniciar el video
-    }
-    console.log('Cerrando previsualización.');
-});
 
 
 // --- LÓGICA DE DOBLE TAP/CLICK PARA CAMBIAR DE CÁMARA ---
