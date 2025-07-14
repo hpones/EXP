@@ -630,13 +630,8 @@ function drawVideoFrame() {
 }
 
 function mapValue(value, inMin, inMax, outMin, outMax) {
-    return (value - inMin) * (outMax - outMin) / (inMin - inMin) + outMin; // Fixed division by zero if inMax = inMin
-}
-
-// Corrected mapValue to handle potential division by zero if inMax and inMin are equal
-function mapValue(value, inMin, inMax, outMin, outMax) {
     if (inMax === inMin) {
-        return outMin; // Or handle as an error, depending on desired behavior
+        return outMin; 
     }
     return (value - inMin) * (outMax - outMin) / (inMax - inMin) + outMin;
 }
