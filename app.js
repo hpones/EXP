@@ -14,12 +14,6 @@ let controls = document.getElementById('controls');
 let recordingControls = document.getElementById('recording-controls');
 let cameraContainer = document.getElementById('camera-container'); // Necesario para fullscreen
 
-// Elementos del modal de previsualización (se eliminan o se ignoran, ya no se usan)
-// let previewModal = document.getElementById('preview-modal');
-// let previewContent = document.getElementById('preview-content');
-// let closePreviewBtn = document.getElementById('close-preview-button');
-
-
 let currentStream;
 let mediaRecorder;
 let chunks = [];
@@ -432,7 +426,7 @@ async function startCamera(deviceId) {
             analyser = audioContext.createAnalyser();
             analyser.fftSize = 256; // Un tamaño de FFT más pequeño para una respuesta más rápida
             analyser.smoothingTimeConstant = 0.7; // Suaviza la lectura
-            dataArray = new Uint8Array(analyser.frequencyBinCount);
+            dataArray = new Uint8Array(analyser.frequencyBinBinCount);
             console.log('startCamera: AudioContext y Analyser inicializados.');
         }
 
