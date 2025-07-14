@@ -73,7 +73,7 @@ const fsSource = `
     precision mediump float;
 
     uniform sampler2D u_image;
-    uniform bool u_flipX;
+    // uniform bool u_flipX; // Eliminado, ya que MediaPipe no requiere volteo
     uniform int u_filterType; // Nuevo uniform para seleccionar el filtro
     uniform vec2 u_resolution; // Nuevo uniform para la resolución del canvas
     uniform float u_time; // Nuevo uniform para el tiempo, para efectos dinámicos
@@ -91,14 +91,15 @@ const fsSource = `
     const int FILTER_GRAYSCALE = 1;
     const int FILTER_INVERT = 2;
     const int FILTER_SEPIA = 3;
-    const int FILTER_MIRROR = 4; // Nuevo filtro Espejo
-    const int FILTER_ECO_PINK = 5;
-    const int FILTER_WEIRD = 6;
-    const int FILTER_AUDIO_COLOR_SHIFT = 7;
-    const int FILTER_GLOW_OUTLINE = 8;
-    const int FILTER_ANGELICAL_GLITCH = 9;
-    const int FILTER_MODULAR_COLOR_SHIFT = 10; // Nuevo filtro
-
+    const int FILTER_ECO_PINK = 4;
+    const int FILTER_WEIRD = 5;
+    const int FILTER_GLOW_OUTLINE = 6;
+    const int FILTER_ANGELICAL_GLITCH = 7;
+    const int FILTER_AUDIO_COLOR_SHIFT = 8;
+    const int FILTER_MODULAR_COLOR_SHIFT = 9;
+    const int FILTER_WHITE_GLOW = 10; // Nuevo
+    const int FILTER_BLACK_BG = 11;   // Nuevo
+    const int FILTER_WHITE_BG = 12;   // Nuevo
 
     // Función para generar ruido básico (copiada de tu fragShader anterior)
     float random(vec2 st) {
@@ -112,9 +113,9 @@ const fsSource = `
 
     void main() {
         vec2 texCoord = v_texCoord;
-        if (u_flipX) {
-            texCoord.x = 1.0 - texCoord.x; // Voltear horizontalmente
-        }
+        // if (u_flipX) { // Eliminado
+        //     texCoord.x = 1.0 - texCoord.x;
+        // }
         vec4 color = texture2D(u_image, texCoord); // Color original del píxel
         vec3 finalColor = color.rgb;
         float alpha = color.a;
@@ -132,14 +133,7 @@ const fsSource = `
             finalColor.g = (r * 0.349) + (g * 0.686) + (b * 0.168);
             finalColor.b = (r * 0.272) + (g * 0.534) + (b * 0.131);
             finalColor = clamp(finalColor, 0.0, 1.0);
-        } else if (u_filterType == FILTER_MIRROR) { // Lógica del nuevo filtro Espejo
-            vec2 mirrorTexCoord = texCoord;
-            if (texCoord.x > 0.5) {
-                mirrorTexCoord.x = 1.0 - texCoord.x;
-            }
-            finalColor = texture2D(u_image, mirrorTexCoord).rgb;
-        }
-        else if (u_filterType == FILTER_ECO_PINK) {
+        } else if (u_filterType == FILTER_ECO_PINK) {
             float brightness = (color.r + color.g + color.b) / 3.0;
             if (brightness < 0.3137) {
                 finalColor.r = min(1.0, color.r + (80.0/255.0));
@@ -156,8 +150,6 @@ const fsSource = `
             } else if (brightness < 0.3921) {
                 finalColor *= 0.5;
             }
-        } else if (u_filterType == FILTER_AUDIO_COLOR_SHIFT) { 
-            finalColor = mod(color.rgb + u_colorShift, 1.0);
         } else if (u_filterType == FILTER_GLOW_OUTLINE) {
             vec2 onePixel = vec2(1.0, 1.0) / u_resolution;
             float distortionFactor = 0.005;
@@ -206,7 +198,9 @@ const fsSource = `
                 finalColor = distorted.rgb;
             }
             alpha = col.a;
-        } else if (u_filterType == FILTER_MODULAR_COLOR_SHIFT) { // Lógica del nuevo filtro "Modular Color Shift"
+        } else if (u_filterType == FILTER_AUDIO_COLOR_SHIFT) { 
+            finalColor = mod(color.rgb + u_colorShift, 1.0);
+        } else if (u_filterType == FILTER_MODULAR_COLOR_SHIFT) {
             // Paletas de color (normalizadas de 0-255 a 0-1)
             const vec3 palette0 = vec3(80.0/255.0, 120.0/255.0, 180.0/255.0); // Graves
             const vec3 palette1 = vec3(100.0/255.0, 180.0/255.0, 200.0/255.0); // Medios
@@ -223,7 +217,38 @@ const fsSource = `
                 finalColor.rgb = mix(color.rgb, palette0, u_bassAmp);
             }
             finalColor.rgb = clamp(finalColor.rgb, 0.0, 1.0); // Asegurarse de que los colores estén en el rango 0-1
+        } else if (u_filterType == FILTER_WHITE_GLOW) { // Contorno blanco brillante
+            // Simple detección de borde y color blanco para el contorno
+            vec2 onePixel = vec2(1.0, 1.0) / u_resolution;
+            vec4 up = texture2D(u_image, texCoord + vec2(0.0, onePixel.y));
+            vec4 down = texture2D(u_image, texCoord + vec2(0.0, -onePixel.y));
+            vec4 left = texture2D(u_image, texCoord + vec2(-onePixel.x, 0.0));
+            vec4 right = texture2D(u_image, texCoord + vec2(onePixel.x, 0.0));
+
+            float diff = length(color - up) + length(color - down) + length(color - left) + length(color - right);
+            float edge = smoothstep(0.05, 0.3, diff); // Ajusta los umbrales para el grosor del contorno
+
+            finalColor = mix(color.rgb, vec3(1.0, 1.0, 1.0), edge * 0.8); // Mezcla con blanco para el contorno
+        } else if (u_filterType == FILTER_BLACK_BG) { // Fondo negro (silueta)
+            // Asumiendo que el color del fondo es más oscuro que el primer plano.
+            // Esto es una simplificación, para segmentación real se necesitaría MediaPipe.
+            // Aquí, simplemente hacemos que los colores oscuros se vuelvan negros.
+            float avgBrightness = (color.r + color.g + color.b) / 3.0;
+            if (avgBrightness < 0.3) { // Si el brillo promedio es bajo, hazlo negro
+                finalColor = vec3(0.0); // Negro
+            } else {
+                finalColor = color.rgb; // Mantén el color original del objeto en primer plano
+            }
+        } else if (u_filterType == FILTER_WHITE_BG) { // Fondo blanco (silueta)
+            // Similar al fondo negro, pero para fondo blanco.
+            float avgBrightness = (color.r + color.g + color.b) / 3.0;
+            if (avgBrightness < 0.3) { // Si el brillo promedio es bajo, hazlo blanco
+                finalColor = vec3(1.0); // Blanco
+            } else {
+                finalColor = color.rgb; // Mantén el color original del objeto en primer plano
+            }
         }
+
 
         gl_FragColor = vec4(finalColor, alpha);
     }
@@ -320,7 +345,7 @@ function initWebGL() {
     program.positionLocation = gl.getAttribLocation(program, 'a_position');
     program.texCoordLocation = gl.getAttribLocation(program, 'a_texCoord');
     program.imageLocation = gl.getUniformLocation(program, 'u_image');
-    program.flipXLocation = gl.getUniformLocation(program, 'u_flipX');
+    // program.flipXLocation = gl.getUniformLocation(program, 'u_flipX'); // Eliminado
     filterTypeLocation = gl.getUniformLocation(program, 'u_filterType'); // Obtener ubicación del uniform del filtro
     program.resolutionLocation = gl.getUniformLocation(program, 'u_resolution'); // Obtener ubicación del uniform de resolución
     timeLocation = gl.getUniformLocation(program, 'u_time'); // Obtener ubicación del uniform de tiempo
@@ -426,7 +451,7 @@ async function startCamera(deviceId) {
             analyser = audioContext.createAnalyser();
             analyser.fftSize = 256; // Un tamaño de FFT más pequeño para una respuesta más rápida
             analyser.smoothingTimeConstant = 0.7; // Suaviza la lectura
-            dataArray = new Uint8Array(analyser.frequencyBinBinCount);
+            dataArray = new Uint8Array(analyser.frequencyBinCount);
             console.log('startCamera: AudioContext y Analyser inicializados.');
         }
 
@@ -513,8 +538,8 @@ function drawVideoFrame() {
 
     gl.useProgram(program);
 
-    const isFrontFacing = currentFacingMode === 'user';
-    gl.uniform1i(program.flipXLocation, isFrontFacing ? 1 : 0);
+    // const isFrontFacing = currentFacingMode === 'user'; // Eliminado, ya que MediaPipe no requiere volteo
+    // gl.uniform1i(program.flipXLocation, isFrontFacing ? 1 : 0); // Eliminado
     
     // Pasar la resolución al shader
     gl.uniform2f(program.resolutionLocation, glcanvas.width, glcanvas.height);
@@ -546,13 +571,15 @@ function drawVideoFrame() {
         case 'grayscale': filterIndex = 1; break; // FILTER_GRAYSCALE
         case 'invert': filterIndex = 2; break;    // FILTER_INVERT
         case 'sepia': filterIndex = 3; break;     // FILTER_SEPIA
-        case 'mirror': filterIndex = 4; break;    // FILTER_MIRROR
-        case 'eco-pink': filterIndex = 5; break;  // FILTER_ECO_PINK
-        case 'weird': filterIndex = 6; break;     // FILTER_WEIRD
-        case 'audio-color-shift': filterIndex = 7; break; // Filtro Audio Color Shift
-        case 'glow-outline': filterIndex = 8; break; // Filtro Glow con contorno
-        case 'angelical-glitch': filterIndex = 9; break; // Filtro Angelical Glitch
-        case 'modular-color-shift': filterIndex = 10; break; // Nuevo filtro Modular Color Shift
+        case 'eco-pink': filterIndex = 4; break;  // FILTER_ECO_PINK
+        case 'weird': filterIndex = 5; break;     // FILTER_WEIRD
+        case 'glow-outline': filterIndex = 6; break; // Filtro Glow con contorno
+        case 'angelical-glitch': filterIndex = 7; break; // Filtro Angelical Glitch
+        case 'audio-color-shift': filterIndex = 8; break; // Filtro Audio Color Shift
+        case 'modular-color-shift': filterIndex = 9; break; // Nuevo filtro Modular Color Shift
+        case 'whiteGlow': filterIndex = 10; break; // Nuevo filtro de contorno blanco
+        case 'blackBg': filterIndex = 11; break;   // Nuevo filtro de fondo negro
+        case 'whiteBg': filterIndex = 12; break;   // Nuevo filtro de fondo blanco
         default: filterIndex = 0; break;
     }
     gl.uniform1i(filterTypeLocation, filterIndex);
@@ -563,7 +590,7 @@ function drawVideoFrame() {
 
 // Función auxiliar para mapear un valor de un rango a otro
 function mapValue(value, inMin, inMax, outMin, outMax) {
-    return (value - inMin) * (outMax - outMin) / (inMin - inMax) + outMin;
+    return (value - inMin) * (outMax - outMin) / (inMax - inMin) + outMin;
 }
 
 
@@ -610,7 +637,9 @@ recordBtn.addEventListener('click', () => {
         vid.play();
         console.log('Video grabado cargado y reproduciendo.');
       };
-      addToGallery(vid, 'video');
+      // No llamar a addToGallery con videos por ahora
+      // addToGallery(vid, 'video'); 
+      alert('Video grabado. Se ha guardado en la memoria temporal del navegador, pero la previsualización directa en la galería está deshabilitada por el momento.');
     };
     mediaRecorder.start();
     isRecording = true;
@@ -671,6 +700,12 @@ function addToGallery(element, type) {
   // Event listener para abrir la ventana de previsualización al hacer clic
   element.addEventListener('click', () => {
         console.log('Creando ventana de previsualización de', type);
+        // Solo previsualizar imágenes por ahora
+        if (type !== 'img') {
+            console.log('Previsualización de videos deshabilitada.');
+            return;
+        }
+
         const previewWindow = document.createElement('div');
         previewWindow.className = 'preview-window';
         document.body.appendChild(previewWindow);
@@ -681,10 +716,7 @@ function addToGallery(element, type) {
         previewWindow.appendChild(closeButton);
 
         const clonedElement = element.cloneNode(true);
-        if (type === 'video') {
-            clonedElement.controls = true;
-            clonedElement.play(); // Reproducir video al abrir la previsualización
-        }
+        // Si fuera video, la lógica iría aquí (clonedElement.controls = true; clonedElement.play();)
         previewWindow.appendChild(clonedElement);
 
         // --- Botones de acción en la previsualización ---
@@ -696,7 +728,7 @@ function addToGallery(element, type) {
         downloadBtn.onclick = () => {
             const a = document.createElement('a');
             a.href = clonedElement.src;
-            a.download = type === 'img' ? 'foto_preview.png' : 'video_preview.webm';
+            a.download = type === 'img' ? 'foto_preview.png' : 'video_preview.webm'; // Asegura el nombre
             a.click();
             console.log('Descargando desde previsualización', type);
         };
@@ -746,10 +778,7 @@ function addToGallery(element, type) {
 
         // Event listener para cerrar la ventana
         closeButton.addEventListener('click', () => {
-            if (type === 'video') {
-                clonedElement.pause();
-                clonedElement.currentTime = 0;
-            }
+            // Si fuera video, la lógica de pausa iría aquí
             previewWindow.remove();
             console.log('Ventana de previsualización cerrada.');
         });
