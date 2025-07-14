@@ -552,45 +552,33 @@ function drawVideoFrame() {
     const isMediaPipeFilter = ['whiteGlow', 'blackBg', 'whiteBg'].includes(selectedFilter);
 
     if (isMediaPipeFilter && mpResults && mpResults.segmentationMask && mpResults.image) {
-        // Renderizar con MediaPipe en el canvas 2D auxiliar
-        mpCanvasCtx.clearRect(0, 0, canvas.width, canvas.height);
-        
+        mpCanvasCtx.clearRect(0, 0, canvas.width, canvas.height); // Siempre limpia el canvas auxiliar primero
+
         switch (selectedFilter) {
-            case "whiteGlow":
-                // Código de silueta roja para contorno blanco brillante
-                mpCanvasCtx.save();
-                mpCanvasCtx.filter = "blur(20px)";
-                mpCanvasCtx.globalAlpha = 0.7;
-                for (let i = 0; i < 3; i++) {
-                    mpCanvasCtx.drawImage(mpResults.segmentationMask, 0, 0, canvas.width, canvas.height);
-                }
-                mpCanvasCtx.restore();
-
-                mpCanvasCtx.save();
-                mpCanvasCtx.globalCompositeOperation = "destination-in";
-                mpCanvasCtx.drawImage(mpResults.segmentationMask, 0, 0, canvas.width, canvas.height);
-                mpCanvasCtx.restore();
-
-                mpCanvasCtx.globalCompositeOperation = "destination-over";
+            case "whiteGlow": // "Silueta roja" (person red, original background)
+                // Dibuja la imagen original como fondo
                 mpCanvasCtx.drawImage(mpResults.image, 0, 0, canvas.width, canvas.height);
+                
+                // Aplica el color rojo solo donde la máscara indica la persona
+                mpCanvasCtx.save();
+                mpCanvasCtx.globalCompositeOperation = 'source-atop'; // Dibuja nuevo contenido solo donde ya hay contenido (la persona del original)
+                mpCanvasCtx.fillStyle = 'red';
+                mpCanvasCtx.fillRect(0, 0, canvas.width, canvas.height);
+                mpCanvasCtx.restore();
                 break;
 
             case "blackBg":
             case "whiteBg":
-                // Código de silueta roja para fondo blanco/negro
+                // 1. Dibuja el color de fondo deseado (negro o blanco)
                 mpCanvasCtx.fillStyle = selectedFilter === "blackBg" ? "black" : "white";
                 mpCanvasCtx.fillRect(0, 0, canvas.width, canvas.height);
 
-                mpCanvasCtx.save();
-                mpCanvasCtx.globalCompositeOperation = "destination-in";
-                mpCanvasCtx.drawImage(mpResults.segmentationMask, 0, 0, canvas.width, canvas.height);
-                mpCanvasCtx.restore();
-
-                mpCanvasCtx.globalCompositeOperation = "destination-over";
+                // 2. Dibuja la imagen original, recortada por la máscara de segmentación, sobre el fondo
+                mpCanvasCtx.globalCompositeOperation = 'destination-atop'; // Dibuja nuevo contenido solo donde el canvas ya tiene píxeles no transparentes
                 mpCanvasCtx.drawImage(mpResults.image, 0, 0, canvas.width, canvas.height);
                 break;
         }
-        mpCanvasCtx.globalCompositeOperation = "source-over"; // Resetear para futuros dibujos
+        mpCanvasCtx.globalCompositeOperation = "source-over"; // Reinicia a la operación por defecto para futuros dibujos
 
         // Actualizar la textura WebGL con el contenido del canvas 2D de MediaPipe
         gl.activeTexture(gl.TEXTURE0);
@@ -642,8 +630,17 @@ function drawVideoFrame() {
 }
 
 function mapValue(value, inMin, inMax, outMin, outMax) {
+    return (value - inMin) * (outMax - outMin) / (inMin - inMin) + outMin; // Fixed division by zero if inMax = inMin
+}
+
+// Corrected mapValue to handle potential division by zero if inMax and inMin are equal
+function mapValue(value, inMin, inMax, outMin, outMax) {
+    if (inMax === inMin) {
+        return outMin; // Or handle as an error, depending on desired behavior
+    }
     return (value - inMin) * (outMax - outMin) / (inMax - inMin) + outMin;
 }
+
 
 // Check for MP4 support
 const supportsMp4 = MediaRecorder.isTypeSupported('video/mp4; codecs=avc1.424028');
