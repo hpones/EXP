@@ -205,3 +205,56 @@ video {
 .gallery-actions button:hover {
   background-color: #777;
 }
+
+/* Estilos para la nueva ventana de previsualización */
+.preview-window {
+    position: fixed; /* Usar fixed para que se posicione respecto al viewport */
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    background-color: #111;
+    border: 1px solid #555;
+    box-shadow: 0 0 10px rgba(0, 0, 0, 0.7);
+    z-index: 1000; /* Asegura que esté por encima de todo */
+    display: flex;
+    flex-direction: column;
+    max-width: 90%;
+    max-height: 90%;
+    overflow: auto;
+    resize: both; /* Permite al usuario redimensionar la ventana */
+    min-width: 200px; /* Tamaño mínimo para que no se pierda */
+    min-height: 150px;
+    cursor: grab; /* Indica que es arrastrable */
+    padding: 10px; /* Espacio interno para el contenido */
+}
+
+.preview-window img,
+.preview-window video {
+    width: auto;
+    max-width: 100%;
+    height: auto;
+    max-height: 100%;
+    display: block;
+    margin: 0; /* Eliminar margen para que se ajuste mejor al padding de la ventana */
+    /* Para que el contenido no se salga de la ventana al redimensionar */
+    box-sizing: border-box; 
+    flex-shrink: 0; /* Asegura que la imagen/video no se encoja en flexbox */
+}
+
+.close-preview-window-button {
+    position: absolute;
+    top: 5px; /* Ajustado para que no esté pegado al borde */
+    right: 5px; /* Ajustado para que no esté pegado al borde */
+    color: white;
+    font-size: 20px;
+    cursor: pointer;
+    background: rgba(0, 0, 0, 0.5);
+    border-radius: 50%; /* Hacerlo circular */
+    padding: 2px 7px; /* Ajustar padding para que sea un círculo más estético */
+    z-index: 1001; /* Asegura que el botón esté encima del contenido */
+    line-height: 1; /* Asegura que el 'x' esté centrado */
+}
+
+.close-preview-window-button:hover {
+    background: rgba(0, 0, 0, 0.7);
+}
