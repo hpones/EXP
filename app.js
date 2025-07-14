@@ -103,6 +103,9 @@ const fsSource = `
     const int FILTER_ANGELICAL_GLITCH = 7;
     const int FILTER_AUDIO_COLOR_SHIFT = 8;
     const int FILTER_MODULAR_COLOR_SHIFT = 9;
+    const int FILTER_FRACTAL = 10;
+    const int FILTER_MIRROR = 11;
+    const int FILTER_FISHEYE = 12;
     // Los filtros de silueta serán manejados por MediaPipe en el canvas 2D
 
     // Función para generar ruido básico
@@ -216,6 +219,28 @@ const fsSource = `
                 finalColor.rgb = mix(color.rgb, palette0, u_bassAmp);
             }
             finalColor.rgb = clamp(finalColor.rgb, 0.0, 1.0);
+        } else if (u_filterType == FILTER_FRACTAL) {
+            vec2 z = texCoord * 2.0 - 1.0;
+            z *= 1.5; // Zoom out a bit
+            vec2 c = vec2(-0.8, 0.156); // Julia set constant
+            
+            float iter = 0.0;
+            for (int i = 0; i < 60; i++) {
+                if (dot(z, z) > 4.0) break;
+                z = vec2(z.x * z.x - z.y * z.y, 2.0 * z.x * z.y) + c;
+                iter++;
+            }
+            finalColor = vec3(iter * 0.03, iter * 0.05, iter * 0.07);
+            finalColor = mix(finalColor, color.rgb, 0.5); // Blend with original
+        } else if (u_filterType == FILTER_MIRROR) {
+            vec2 p = texCoord;
+            if (p.x > 0.5) p.x = 1.0 - p.x;
+            finalColor = texture2D(u_image, p).rgb;
+        } else if (u_filterType == FILTER_FISHEYE) {
+            vec2 tc = texCoord - 0.5;
+            float dist = dot(tc, tc);
+            float blur = 1.0 - dist * 0.8; // Adjust 0.8 for desired fisheye strength
+            finalColor = texture2D(u_image, tc * blur + 0.5).rgb;
         }
 
         gl_FragColor = vec4(finalColor, alpha);
@@ -403,8 +428,8 @@ async function startCamera(deviceId) {
   const constraints = {
     video: {
       deviceId: deviceId ? { exact: deviceId } : undefined,
-      width: { ideal: 1280 },
-      height: { ideal: 720 }
+      width: { ideal: 1920 }, // Request higher resolution for better quality
+      height: { ideal: 1080 }
     },
     audio: true
   };
@@ -598,6 +623,9 @@ function drawVideoFrame() {
             case 'angelical-glitch': filterIndex = 7; break;
             case 'audio-color-shift': filterIndex = 8; break;
             case 'modular-color-shift': filterIndex = 9; break;
+            case 'fractal': filterIndex = 10; break;
+            case 'mirror': filterIndex = 11; break;
+            case 'fisheye': filterIndex = 12; break;
             default: filterIndex = 0; break;
         }
         gl.uniform1i(filterTypeLocation, filterIndex);
@@ -611,6 +639,10 @@ function mapValue(value, inMin, inMax, outMin, outMax) {
     return (value - inMin) * (outMax - outMin) / (inMax - inMin) + outMin;
 }
 
+// Check for MP4 support
+const supportsMp4 = MediaRecorder.isTypeSupported('video/mp4; codecs=avc1.424028');
+const mimeType = supportsMp4 ? 'video/mp4; codecs=avc1.424028' : 'video/webm; codecs=vp8';
+console.log(`Video recording will use: ${mimeType}`);
 
 // --- MANEJADORES DE EVENTOS ---
 captureBtn.addEventListener('click', () => {
@@ -635,17 +667,18 @@ recordBtn.addEventListener('click', () => {
   if (!isRecording) {
     chunks = [];
     console.log('Iniciando grabación desde glcanvas.captureStream().');
-    let streamToRecord = glcanvas.captureStream(); // Capturar el stream del canvas con los filtros
+    let streamToRecord = glcanvas.captureStream(60); // Request 60 FPS for fluidity
     
-    // Si hay audio en el currentStream de la cámara, añadirlo a la grabación
+    // If there's audio in the currentStream from the camera, add it to the recording
     const audioTracks = currentStream.getAudioTracks();
     if (audioTracks.length > 0) {
-        let audioStream = new MediaStream();
-        audioStream.addTrack(audioTracks[0]);
-        streamToRecord.addTrack(audioTracks[0]); // Combina el video del canvas con el audio de la cámara
+        streamToRecord.addTrack(audioTracks[0]); // Combine video from canvas with audio from camera
     }
 
-    mediaRecorder = new MediaRecorder(streamToRecord, { mimeType: 'video/webm; codecs=vp8' });
+    // Set a higher bitrate for better quality
+    const options = { mimeType: mimeType, videoBitsPerSecond: 8 * 1024 * 1024 }; // 8 Mbps
+
+    mediaRecorder = new MediaRecorder(streamToRecord, options);
 
     mediaRecorder.ondataavailable = e => {
       if (e.data.size > 0) chunks.push(e.data);
@@ -653,7 +686,7 @@ recordBtn.addEventListener('click', () => {
     };
     mediaRecorder.onstop = () => {
       console.log('Grabación detenida. Chunks capturados:', chunks.length);
-      const blob = new Blob(chunks, { type: 'video/webm' });
+      const blob = new Blob(chunks, { type: mimeType });
       const url = URL.createObjectURL(blob);
       let vid = document.createElement('video');
       vid.src = url;
@@ -662,7 +695,7 @@ recordBtn.addEventListener('click', () => {
         vid.play();
         console.log('Video grabado cargado y reproduciendo.');
       };
-      addToGallery(vid, 'video'); // Ahora sí se añade el video a la galería
+      addToGallery(vid, 'video', mimeType.split(';')[0]); // Pass mimeType to gallery
     };
     mediaRecorder.start();
     isRecording = true;
@@ -714,7 +747,7 @@ fullscreenBtn.addEventListener('click', () => {
   }
 });
 
-function addToGallery(element, type) {
+function addToGallery(element, type, fileMimeType = '') {
   let container = document.createElement('div');
   container.className = 'gallery-item';
   container.appendChild(element);
@@ -728,14 +761,14 @@ function addToGallery(element, type) {
         document.body.appendChild(previewWindow);
 
         const closeButton = document.createElement('span');
-        closeButton.textContent = 'X'; // Emoji eliminado
+        closeButton.textContent = '✖'; 
         closeButton.className = 'close-preview-window-button';
         previewWindow.appendChild(closeButton);
 
         const clonedElement = element.cloneNode(true);
         if (type === 'video') {
-            clonedElement.controls = true; // Mostrar controles para videos
-            clonedElement.play(); // Reproducir al abrir
+            clonedElement.controls = true; // Show controls for videos
+            clonedElement.play(); // Play on open
         }
         previewWindow.appendChild(clonedElement);
 
@@ -744,27 +777,27 @@ function addToGallery(element, type) {
         previewActions.className = 'preview-actions';
 
         let downloadBtn = document.createElement('button');
-        downloadBtn.textContent = 'Descargar'; // Emoji eliminado
+        downloadBtn.textContent = '⬇'; 
         downloadBtn.onclick = () => {
             const a = document.createElement('a');
             a.href = clonedElement.src;
-            a.download = type === 'img' ? `foto_${Date.now()}.png` : `video_${Date.now()}.webm`; // Nombre único
+            const extension = type === 'img' ? 'png' : (fileMimeType === 'video/mp4' ? 'mp4' : 'webm');
+            a.download = `${type}_${Date.now()}.${extension}`; 
             a.click();
             console.log('Descargando desde previsualización', type);
         };
 
         let shareBtn = document.createElement('button');
-        shareBtn.textContent = 'Compartir'; // Emoji eliminado
+        shareBtn.textContent = '✉︎'; 
         shareBtn.onclick = async () => {
             if (navigator.share) {
                 try {
                     const file = await fetch(clonedElement.src).then(res => res.blob());
-                    const fileName = type === 'img' ? `foto_${Date.now()}.png` : `video_${Date.now()}.webm`;
-                    const fileType = type === 'img' ? 'image/png' : 'video/webm';
+                    const extension = type === 'img' ? 'png' : (fileMimeType === 'video/mp4' ? 'mp4' : 'webm');
+                    const fileName = `${type}_${Date.now()}.${extension}`;
                     const shareData = {
-                        files: [new File([file], fileName, { type: fileType })],
-                        title: 'Mi creación desde Experimental Camera',
-                        text: '¡Echa un vistazo a lo que hice con Experimental Camera!'
+                        files: [new File([file], fileName, { type: fileMimeType || element.src.includes('data:image') ? 'image/png' : 'video/webm' })],
+                        // Removed title and text properties
                     };
                     await navigator.share(shareData);
                     console.log('Contenido compartido exitosamente desde previsualización');
@@ -778,13 +811,13 @@ function addToGallery(element, type) {
         };
 
         let deleteBtn = document.createElement('button');
-        deleteBtn.textContent = 'Eliminar'; // Emoji eliminado
+        deleteBtn.textContent = '✖'; 
         deleteBtn.onclick = () => {
             if (type === 'video' && clonedElement.src.startsWith('blob:')) {
-                URL.revokeObjectURL(clonedElement.src); // Libera la URL del blob para videos
+                URL.revokeObjectURL(clonedElement.src); // Revoke blob URL for videos
             }
-            previewWindow.remove(); // Cierra la ventana de previsualización
-            container.remove(); // Elimina el elemento de la galería
+            previewWindow.remove(); // Close preview window
+            container.remove(); // Remove element from gallery
             console.log('Elemento de galería y previsualización eliminados.');
         };
         
@@ -794,9 +827,9 @@ function addToGallery(element, type) {
         }
         previewActions.appendChild(deleteBtn);
         previewWindow.appendChild(previewActions);
-        // --- Fin Botones de acción en la previsualización ---
+        // --- End action buttons in preview ---
 
-        // Event listener para cerrar la ventana
+        // Event listener to close the window
         closeButton.addEventListener('click', () => {
             if (type === 'video' && clonedElement) {
                 clonedElement.pause();
@@ -805,36 +838,36 @@ function addToGallery(element, type) {
             console.log('Ventana de previsualización cerrada.');
         });
 
-        // Hacer la ventana arrastrable
+        // Make the window draggable
         let pos1 = 0, pos2 = 0, pos3 = 0, pos4 = 0;
         previewWindow.onmousedown = dragMouseDown;
 
         function dragMouseDown(e) {
             e = e || window.event;
             e.preventDefault();
-            // obtener la posición del cursor en el inicio:
+            // get the cursor position at startup:
             pos3 = e.clientX;
             pos4 = e.clientY;
             document.onmouseup = closeDragElement;
-            // llamar a una función cada vez que el cursor se mueve:
+            // call a function whenever the cursor moves:
             document.onmousemove = elementDrag;
         }
 
         function elementDrag(e) {
             e = e || window.event;
             e.preventDefault();
-            // calcular la nueva posición del cursor:
+            // calculate the new cursor position:
             pos1 = pos3 - e.clientX;
             pos2 = pos4 - e.clientY;
             pos3 = e.clientX;
             pos4 = e.clientY;
-            // establecer la nueva posición del elemento:
+            // set the element's new position:
             previewWindow.style.top = (previewWindow.offsetTop - pos2) + "px";
             previewWindow.style.left = (previewWindow.offsetLeft - pos1) + "px";
         }
 
         function closeDragElement() {
-            /* dejar de moverse cuando se suelta el botón del ratón: */
+            /* stop moving when mouse button is released: */
             document.onmouseup = null;
             document.onmousemove = null;
         }
@@ -844,27 +877,27 @@ function addToGallery(element, type) {
   actions.className = 'gallery-actions';
 
   let downloadBtn = document.createElement('button');
-  downloadBtn.textContent = 'Descargar';
+  downloadBtn.textContent = '⬇';
   downloadBtn.onclick = () => {
     const a = document.createElement('a');
     a.href = element.src;
-    a.download = type === 'img' ? `foto_${Date.now()}.png` : `video_${Date.now()}.webm`;
+    const extension = type === 'img' ? 'png' : (fileMimeType === 'video/mp4' ? 'mp4' : 'webm');
+    a.download = `${type}_${Date.now()}.${extension}`;
     a.click();
     console.log('Descargando', type);
   };
 
   let shareBtn = document.createElement('button');
-  shareBtn.textContent = 'Compartir';
+  shareBtn.textContent = '✉︎';
   shareBtn.onclick = async () => {
     if (navigator.share) {
       try {
         const file = await fetch(element.src).then(res => res.blob());
-        const fileName = type === 'img' ? `foto_${Date.now()}.png` : `video_${Date.now()}.webm`;
-        const fileType = type === 'img' ? 'image/png' : 'video/webm';
+        const extension = type === 'img' ? 'png' : (fileMimeType === 'video/mp4' ? 'mp4' : 'webm');
+        const fileName = `${type}_${Date.now()}.${extension}`;
         const shareData = {
-          files: [new File([file], fileName, { type: fileType })],
-          title: 'Mi creación desde Experimental Camera',
-          text: '¡Echa un vistazo a lo que hice con Experimental Camera!'
+          files: [new File([file], fileName, { type: fileMimeType || element.src.includes('data:image') ? 'image/png' : 'video/webm' })],
+          // Removed title and text properties
         };
         await navigator.share(shareData);
         console.log('Contenido compartido exitosamente');
@@ -878,7 +911,7 @@ function addToGallery(element, type) {
   };
 
   let deleteBtn = document.createElement('button');
-  deleteBtn.textContent = 'Eliminar';
+  deleteBtn.textContent = '✖';
   deleteBtn.onclick = () => {
     if (type === 'video' && element.src.startsWith('blob:')) {
       URL.revokeObjectURL(element.src);
@@ -936,37 +969,56 @@ function changePaletteIndex() {
 
 // --- LÓGICA DE SWIPE PARA CAMBIAR FILTROS ---
 let touchStartX = 0;
+let touchStartY = 0; // Added for vertical swipe
 let touchEndX = 0;
-const SWIPE_THRESHOLD = 50; // Pixeles mínimos para considerar un swipe
+let touchEndY = 0; // Added for vertical swipe
+const SWIPE_THRESHOLD = 50; // Minimum pixels to consider a swipe
 
 glcanvas.addEventListener('touchstart', (e) => {
     touchStartX = e.touches[0].clientX;
+    touchStartY = e.touches[0].clientY; // Capture Y start
 });
 
 glcanvas.addEventListener('touchmove', (e) => {
     touchEndX = e.touches[0].clientX;
+    touchEndY = e.touches[0].clientY; // Capture Y end
 });
 
 glcanvas.addEventListener('touchend', () => {
     const diffX = touchEndX - touchStartX;
+    const diffY = touchEndY - touchStartY; // Calculate Y difference
 
-    if (Math.abs(diffX) > SWIPE_THRESHOLD) {
-        // Obtener todas las opciones, incluyendo las de los optgroups
+    // Check for horizontal swipe for filter change
+    if (Math.abs(diffX) > SWIPE_THRESHOLD && Math.abs(diffX) > Math.abs(diffY)) { // Prioritize horizontal
+        // Get all options, including those from optgroups
         const options = Array.from(filterSelect.querySelectorAll('option')).map(option => option.value);
         let currentIndex = options.indexOf(selectedFilter);
 
-        if (diffX > 0) { // Swipe a la derecha (filtro anterior)
+        if (diffX > 0) { // Swipe right (previous filter)
             currentIndex = (currentIndex > 0) ? currentIndex - 1 : options.length - 1;
-        } else { // Swipe a la izquierda (filtro siguiente)
+        } else { // Swipe left (next filter)
             currentIndex = (currentIndex < options.length - 1) ? currentIndex + 1 : 0;
         }
         
         selectedFilter = options[currentIndex];
-        filterSelect.value = selectedFilter; // Sincroniza el select
+        filterSelect.value = selectedFilter; // Synchronize the select
+        console.log('Filtro cambiado por swipe:', selectedFilter);
+    } 
+    // Check for vertical swipe to scroll to gallery in fullscreen
+    else if (document.fullscreenElement && document.fullscreenElement.id === 'camera-container' && diffY > SWIPE_THRESHOLD && Math.abs(diffY) > Math.abs(diffX)) {
+        // Swipe down to scroll to gallery
+        window.scroll({
+            top: document.body.scrollHeight, // Scroll to bottom of the page
+            behavior: 'smooth'
+        });
+        console.log('Swipe down detected in fullscreen, scrolling to gallery.');
     }
-    // Reiniciar valores de touch
+
+    // Reset touch values
     touchStartX = 0;
+    touchStartY = 0;
     touchEndX = 0;
+    touchEndY = 0;
 });
 
 listCameras();
