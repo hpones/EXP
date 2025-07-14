@@ -563,7 +563,7 @@ function drawVideoFrame() {
 
 // Función auxiliar para mapear un valor de un rango a otro
 function mapValue(value, inMin, inMax, outMin, outMax) {
-    return (value - inMin) * (outMax - outMin) / (inMax - inMin) + outMin;
+    return (value - inMin) * (outMax - outMin) / (inMin - inMax) + outMin;
 }
 
 
@@ -683,9 +683,66 @@ function addToGallery(element, type) {
         const clonedElement = element.cloneNode(true);
         if (type === 'video') {
             clonedElement.controls = true;
-            clonedElement.play();
+            clonedElement.play(); // Reproducir video al abrir la previsualización
         }
         previewWindow.appendChild(clonedElement);
+
+        // --- Botones de acción en la previsualización ---
+        let previewActions = document.createElement('div');
+        previewActions.className = 'preview-actions';
+
+        let downloadBtn = document.createElement('button');
+        downloadBtn.textContent = '⬇︎';
+        downloadBtn.onclick = () => {
+            const a = document.createElement('a');
+            a.href = clonedElement.src;
+            a.download = type === 'img' ? 'foto_preview.png' : 'video_preview.webm';
+            a.click();
+            console.log('Descargando desde previsualización', type);
+        };
+
+        let shareBtn = document.createElement('button');
+        shareBtn.textContent = '✉︎';
+        shareBtn.onclick = async () => {
+            if (navigator.share) {
+                try {
+                    const file = await fetch(clonedElement.src).then(res => res.blob());
+                    const fileName = type === 'img' ? 'foto_preview.png' : 'video_preview.webm';
+                    const fileType = type === 'img' ? 'image/png' : 'video/webm';
+                    const shareData = {
+                        files: [new File([file], fileName, { type: fileType })],
+                        title: 'Mi creación desde Experimental Camera',
+                        text: '¡Echa un vistazo a lo que hice con Experimental Camera!'
+                    };
+                    await navigator.share(shareData);
+                    console.log('Contenido compartido exitosamente desde previsualización');
+                } catch (error) {
+                    console.error('Error al compartir desde previsualización:', error);
+                }
+            } else {
+                alert('La API Web Share no es compatible con este navegador.');
+                console.warn('La API Web Share no es compatible.');
+            }
+        };
+
+        let deleteBtn = document.createElement('button');
+        deleteBtn.textContent = '✖︎';
+        deleteBtn.onclick = () => {
+            if (type === 'video' && clonedElement.src.startsWith('blob:')) {
+                URL.revokeObjectURL(clonedElement.src);
+            }
+            previewWindow.remove(); // Cierra la ventana de previsualización
+            container.remove(); // Elimina el elemento de la galería
+            console.log('Elemento de galería y previsualización eliminados.');
+        };
+        
+        previewActions.appendChild(downloadBtn);
+        if (navigator.share) {
+            previewActions.appendChild(shareBtn);
+        }
+        previewActions.appendChild(deleteBtn);
+        previewWindow.appendChild(previewActions);
+        // --- Fin Botones de acción en la previsualización ---
 
         // Event listener para cerrar la ventana
         closeButton.addEventListener('click', () => {
