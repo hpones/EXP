@@ -2,11 +2,10 @@ body {
   margin: 0;
   background: #000;
   font-family: sans-serif;
-  /* overflow-x: hidden; REMOVED to allow fullscreen swipe to scroll */
   display: flex; /* Usamos flexbox para organizar el body */
   flex-direction: column; /* Apila los elementos (cámara y galería) verticalmente */
   min-height: 100vh; /* Asegura que el body ocupe toda la altura de la ventana */
-  overflow-y: auto; /* PERMITE EL SCROLLING PARA VER LA GALERÍA */
+  overflow-y: auto; /* Permite el scrolling general de la página */
 }
 
 #camera-container {
@@ -18,12 +17,12 @@ body {
   align-items: center;
   overflow: hidden; /* Evita desbordamientos si el video tiene una relación de aspecto diferente */
   
-  /* Added for sticky camera */
-  position: sticky;
-  top: 0;
-  z-index: 10; /* Ensure camera stays on top while scrolling gallery */
-  height: 100vh; /* Camera takes full viewport height */
-  flex-shrink: 0; /* Prevent camera container from shrinking */
+  /* REMOVED: sticky positioning for camera to let gallery appear directly below */
+  /* position: sticky; */
+  /* top: 0; */
+  /* z-index: 10; */
+  /* height: 100vh; */
+  /* flex-shrink: 0; */
 }
 
 video, #glcanvas {
@@ -158,7 +157,7 @@ video {
   width: 100%;
   min-height: 150px; /* Altura mínima para que sea visible */
   background: #222;
-  /* margin-top: 10px; REMOVED: gallery is now below the fixed camera */
+  margin-top: 10px; /* ADDED: Space between camera and gallery */
   display: flex;
   flex-wrap: wrap; /* Permite que los items se envuelvan a la siguiente línea */
   gap: 10px; /* Espacio entre los items de la galería */
@@ -169,10 +168,10 @@ video {
   box-sizing: border-box; /* Incluye padding en el ancho/alto */
   flex-shrink: 0; /* Evita que la galería se encoja si el espacio es limitado */
   
-  /* Added for independent scrolling */
-  position: relative; /* Needed for z-index to work */
-  z-index: 5; /* Ensure gallery is above camera when scrolling */
-  padding-top: 10px; /* Add some space from the top of the content */
+  /* REMOVED: Z-index and padding-top related to sticky camera */
+  /* position: relative; */
+  /* z-index: 5; */
+  /* padding-top: 10px; */
 }
 
 .gallery-item {
@@ -209,7 +208,6 @@ video {
   background-color: #555;
   color: white;
   border: none;
-  /* Adjust padding for symbols */
   padding: 5px 10px; /* Increased horizontal padding */
   border-radius: 3px;
   cursor: pointer;
@@ -270,7 +268,6 @@ video {
     background-color: #555;
     color: white;
     border: none;
-    /* Adjust padding for symbols */
     padding: 5px 10px; /* Increased horizontal padding */
     border-radius: 3px;
     cursor: pointer;
