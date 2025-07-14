@@ -103,7 +103,7 @@ const fsSource = `
     const int FILTER_ANGELICAL_GLITCH = 7;
     const int FILTER_AUDIO_COLOR_SHIFT = 8;
     const int FILTER_MODULAR_COLOR_SHIFT = 9;
-    const int FILTER_FRACTAL = 10;
+    const int FILTER_KALEIDOSCOPE = 10; // Changed from FRACTAL
     const int FILTER_MIRROR = 11;
     const int FILTER_FISHEYE = 12;
     // Los filtros de silueta serán manejados por MediaPipe en el canvas 2D
@@ -117,6 +117,21 @@ const fsSource = `
     float brightness(vec3 color) {
         return dot(color, vec3(0.299, 0.587, 0.114));
     }
+
+    // Kaleidoscope effect (replaces Fractal)
+    vec4 kaleidoscope(sampler2D image, vec2 uv, float angle, float segments) {
+        vec2 center = vec2(0.5, 0.5);
+        vec2 p = uv - center;
+        float r = length(p);
+        float a = atan(p.y, p.x);
+        a = mod(a - angle, 2.0 * PI / segments);
+        if (mod(floor(a * segments / PI), 2.0) == 0.0) {
+            a = 2.0 * PI / segments - a;
+        }
+        p = vec2(r * cos(a), r * sin(a));
+        return texture2D(image, p + center);
+    }
+
 
     void main() {
         vec2 texCoord = v_texCoord;
@@ -219,19 +234,9 @@ const fsSource = `
                 finalColor.rgb = mix(color.rgb, palette0, u_bassAmp);
             }
             finalColor.rgb = clamp(finalColor.rgb, 0.0, 1.0);
-        } else if (u_filterType == FILTER_FRACTAL) {
-            vec2 z = texCoord * 2.0 - 1.0;
-            z *= 1.5; // Zoom out a bit
-            vec2 c = vec2(-0.8, 0.156); // Julia set constant
-            
-            float iter = 0.0;
-            for (int i = 0; i < 60; i++) {
-                if (dot(z, z) > 4.0) break;
-                z = vec2(z.x * z.x - z.y * z.y, 2.0 * z.x * z.y) + c;
-                iter++;
-            }
-            finalColor = vec3(iter * 0.03, iter * 0.05, iter * 0.07);
-            finalColor = mix(finalColor, color.rgb, 0.5); // Blend with original
+        } else if (u_filterType == FILTER_KALEIDOSCOPE) { // Kaleidoscope filter
+            const float PI = 3.14159265359;
+            finalColor = kaleidoscope(u_image, texCoord, u_time * 0.2, 6.0).rgb; // 6 segments, rotates slowly
         } else if (u_filterType == FILTER_MIRROR) {
             vec2 p = texCoord;
             if (p.x > 0.5) p.x = 1.0 - p.x;
@@ -290,6 +295,7 @@ function setupQuadBuffers(gl) {
     gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
     gl.bufferData(gl.ARRAY_BUFFER, positions, gl.STATIC_DRAW);
 
+    // Corrected texture coordinates for non-inverted video
     const texCoords = new Float32Array([
         0, 1,
         1, 1,
@@ -623,7 +629,7 @@ function drawVideoFrame() {
             case 'angelical-glitch': filterIndex = 7; break;
             case 'audio-color-shift': filterIndex = 8; break;
             case 'modular-color-shift': filterIndex = 9; break;
-            case 'fractal': filterIndex = 10; break;
+            case 'kaleidoscope': filterIndex = 10; break; // Changed from fractal to kaleidoscope
             case 'mirror': filterIndex = 11; break;
             case 'fisheye': filterIndex = 12; break;
             default: filterIndex = 0; break;
@@ -655,7 +661,7 @@ captureBtn.addEventListener('click', () => {
     img.src = glcanvas.toDataURL('image/png'); 
     
     img.onload = () => {
-        addToGallery(img, 'img');
+        addToGallery(img, 'img', 'image/png'); // Pass image mime type
     };
     img.onerror = (e) => {
         console.error('Error al cargar la imagen para la galería:', e);
@@ -691,6 +697,7 @@ recordBtn.addEventListener('click', () => {
       let vid = document.createElement('video');
       vid.src = url;
       vid.controls = true;
+      vid.autoplay = true; // Autoplay when added to gallery
       vid.onloadedmetadata = () => {
         vid.play();
         console.log('Video grabado cargado y reproduciendo.');
@@ -750,10 +757,19 @@ fullscreenBtn.addEventListener('click', () => {
 function addToGallery(element, type, fileMimeType = '') {
   let container = document.createElement('div');
   container.className = 'gallery-item';
-  container.appendChild(element);
+  
+  // Clone the element for the gallery display (thumbnail)
+  const galleryThumbnail = element.cloneNode(true);
+  if (type === 'video') {
+    galleryThumbnail.controls = false; // No controls for thumbnail
+    galleryThumbnail.muted = true; // Mute thumbnail
+    galleryThumbnail.loop = true; // Loop thumbnail
+    galleryThumbnail.play(); // Autoplay thumbnail
+  }
+  container.appendChild(galleryThumbnail);
 
-  // Event listener para abrir la ventana de previsualización al hacer clic
-  element.addEventListener('click', () => {
+  // Event listener para abrir la ventana de previsualización al hacer clic en el thumbnail
+  galleryThumbnail.addEventListener('click', () => {
         console.log('Creando ventana de previsualización de', type);
         
         const previewWindow = document.createElement('div');
@@ -765,12 +781,15 @@ function addToGallery(element, type, fileMimeType = '') {
         closeButton.className = 'close-preview-window-button';
         previewWindow.appendChild(closeButton);
 
-        const clonedElement = element.cloneNode(true);
+        const clonedElementForPreview = element.cloneNode(true); // Clone original element again for preview
         if (type === 'video') {
-            clonedElement.controls = true; // Show controls for videos
-            clonedElement.play(); // Play on open
+            clonedElementForPreview.controls = true; // Show controls for videos
+            clonedElementForPreview.autoplay = true; // Autoplay on open
+            clonedElementForPreview.muted = false; // Unmute for preview
+            clonedElementForPreview.loop = false; // Don't loop in preview unless intended
+            clonedElementForPreview.play(); // Ensure it plays when opened
         }
-        previewWindow.appendChild(clonedElement);
+        previewWindow.appendChild(clonedElementForPreview);
 
         // --- Botones de acción en la previsualización ---
         let previewActions = document.createElement('div');
@@ -780,7 +799,7 @@ function addToGallery(element, type, fileMimeType = '') {
         downloadBtn.textContent = '⬇'; 
         downloadBtn.onclick = () => {
             const a = document.createElement('a');
-            a.href = clonedElement.src;
+            a.href = clonedElementForPreview.src;
             const extension = type === 'img' ? 'png' : (fileMimeType === 'video/mp4' ? 'mp4' : 'webm');
             a.download = `${type}_${Date.now()}.${extension}`; 
             a.click();
@@ -792,11 +811,11 @@ function addToGallery(element, type, fileMimeType = '') {
         shareBtn.onclick = async () => {
             if (navigator.share) {
                 try {
-                    const file = await fetch(clonedElement.src).then(res => res.blob());
+                    const file = await fetch(clonedElementForPreview.src).then(res => res.blob());
                     const extension = type === 'img' ? 'png' : (fileMimeType === 'video/mp4' ? 'mp4' : 'webm');
                     const fileName = `${type}_${Date.now()}.${extension}`;
                     const shareData = {
-                        files: [new File([file], fileName, { type: fileMimeType || element.src.includes('data:image') ? 'image/png' : 'video/webm' })],
+                        files: [new File([file], fileName, { type: fileMimeType || (type === 'img' ? 'image/png' : 'video/webm') })],
                         // Removed title and text properties
                     };
                     await navigator.share(shareData);
@@ -813,8 +832,8 @@ function addToGallery(element, type, fileMimeType = '') {
         let deleteBtn = document.createElement('button');
         deleteBtn.textContent = '✖'; 
         deleteBtn.onclick = () => {
-            if (type === 'video' && clonedElement.src.startsWith('blob:')) {
-                URL.revokeObjectURL(clonedElement.src); // Revoke blob URL for videos
+            if (type === 'video' && clonedElementForPreview.src.startsWith('blob:')) {
+                URL.revokeObjectURL(clonedElementForPreview.src); // Revoke blob URL for videos
             }
             previewWindow.remove(); // Close preview window
             container.remove(); // Remove element from gallery
@@ -831,8 +850,12 @@ function addToGallery(element, type, fileMimeType = '') {
 
         // Event listener to close the window
         closeButton.addEventListener('click', () => {
-            if (type === 'video' && clonedElement) {
-                clonedElement.pause();
+            if (type === 'video' && clonedElementForPreview) {
+                clonedElementForPreview.pause();
+                // If it's a blob URL, revoke it when the preview is closed, not just when deleted
+                if (clonedElementForPreview.src.startsWith('blob:')) {
+                  URL.revokeObjectURL(clonedElementForPreview.src);
+                }
             }
             previewWindow.remove();
             console.log('Ventana de previsualización cerrada.');
@@ -880,7 +903,7 @@ function addToGallery(element, type, fileMimeType = '') {
   downloadBtn.textContent = '⬇';
   downloadBtn.onclick = () => {
     const a = document.createElement('a');
-    a.href = element.src;
+    a.href = element.src; // Use the original element's src
     const extension = type === 'img' ? 'png' : (fileMimeType === 'video/mp4' ? 'mp4' : 'webm');
     a.download = `${type}_${Date.now()}.${extension}`;
     a.click();
@@ -892,11 +915,11 @@ function addToGallery(element, type, fileMimeType = '') {
   shareBtn.onclick = async () => {
     if (navigator.share) {
       try {
-        const file = await fetch(element.src).then(res => res.blob());
+        const file = await fetch(element.src).then(res => res.blob()); // Use the original element's src
         const extension = type === 'img' ? 'png' : (fileMimeType === 'video/mp4' ? 'mp4' : 'webm');
         const fileName = `${type}_${Date.now()}.${extension}`;
         const shareData = {
-          files: [new File([file], fileName, { type: fileMimeType || element.src.includes('data:image') ? 'image/png' : 'video/webm' })],
+          files: [new File([file], fileName, { type: fileMimeType || (type === 'img' ? 'image/png' : 'video/webm') })],
           // Removed title and text properties
         };
         await navigator.share(shareData);
