@@ -120,6 +120,7 @@ const fsSource = `
 
     // Kaleidoscope effect (replaces Fractal)
     vec4 kaleidoscope(sampler2D image, vec2 uv, float angle, float segments) {
+        const float PI = 3.14159265359;
         vec2 center = vec2(0.5, 0.5);
         vec2 p = uv - center;
         float r = length(p);
@@ -235,7 +236,6 @@ const fsSource = `
             }
             finalColor.rgb = clamp(finalColor.rgb, 0.0, 1.0);
         } else if (u_filterType == FILTER_KALEIDOSCOPE) { // Kaleidoscope filter
-            const float PI = 3.14159265359;
             finalColor = kaleidoscope(u_image, texCoord, u_time * 0.2, 6.0).rgb; // 6 segments, rotates slowly
         } else if (u_filterType == FILTER_MIRROR) {
             vec2 p = texCoord;
