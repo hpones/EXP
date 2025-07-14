@@ -2,7 +2,7 @@ body {
   margin: 0;
   background: #000;
   font-family: sans-serif;
-  overflow-x: hidden;
+  /* overflow-x: hidden; REMOVED to allow fullscreen swipe to scroll */
   display: flex; /* Usamos flexbox para organizar el body */
   flex-direction: column; /* Apila los elementos (cámara y galería) verticalmente */
   min-height: 100vh; /* Asegura que el body ocupe toda la altura de la ventana */
@@ -16,6 +16,13 @@ body {
   justify-content: center;
   align-items: center;
   overflow: hidden; /* Evita desbordamientos si el video tiene una relación de aspecto diferente */
+  
+  /* Added for sticky camera */
+  position: sticky;
+  top: 0;
+  z-index: 10; /* Ensure camera stays on top while scrolling gallery */
+  height: 100vh; /* Camera takes full viewport height */
+  flex-shrink: 0; /* Prevent camera container from shrinking */
 }
 
 video, #glcanvas {
@@ -150,7 +157,7 @@ video {
   width: 100%;
   min-height: 150px; /* Altura mínima para que sea visible */
   background: #222;
-  margin-top: 10px; /* Separación de la cámara */
+  /* margin-top: 10px; REMOVED: gallery is now below the fixed camera */
   display: flex;
   flex-wrap: wrap; /* Permite que los items se envuelvan a la siguiente línea */
   gap: 10px; /* Espacio entre los items de la galería */
@@ -160,6 +167,11 @@ video {
   overflow-y: auto; /* Permite desplazamiento si hay muchos elementos */
   box-sizing: border-box; /* Incluye padding en el ancho/alto */
   flex-shrink: 0; /* Evita que la galería se encoja si el espacio es limitado */
+  
+  /* Added for independent scrolling */
+  position: relative; /* Needed for z-index to work */
+  z-index: 5; /* Ensure gallery is above camera when scrolling */
+  padding-top: 10px; /* Add some space from the top of the content */
 }
 
 .gallery-item {
@@ -196,10 +208,11 @@ video {
   background-color: #555;
   color: white;
   border: none;
-  padding: 5px 8px;
+  /* Adjust padding for symbols */
+  padding: 5px 10px; /* Increased horizontal padding */
   border-radius: 3px;
   cursor: pointer;
-  font-size: 0.8em;
+  font-size: 1.1em; /* Make symbols a bit larger */
 }
 
 .gallery-actions button:hover {
@@ -256,10 +269,11 @@ video {
     background-color: #555;
     color: white;
     border: none;
-    padding: 5px 8px;
+    /* Adjust padding for symbols */
+    padding: 5px 10px; /* Increased horizontal padding */
     border-radius: 3px;
     cursor: pointer;
-    font-size: 0.8em;
+    font-size: 1.1em; /* Make symbols a bit larger */
 }
 
 .preview-actions button:hover {
