@@ -220,10 +220,10 @@ video {
     flex-direction: column;
     max-width: 90%;
     max-height: 90%;
-    overflow: auto;
+    overflow: hidden; /* Oculta el scrollbar principal, el contenido interno puede tener el suyo */
     resize: both; /* Permite al usuario redimensionar la ventana */
-    min-width: 200px; /* Tamaño mínimo para que no se pierda */
-    min-height: 150px;
+    min-width: 250px; /* Tamaño mínimo para que no se pierda */
+    min-height: 200px;
     cursor: grab; /* Indica que es arrastrable */
     padding: 10px; /* Espacio interno para el contenido */
 }
@@ -233,13 +233,39 @@ video {
     width: auto;
     max-width: 100%;
     height: auto;
-    max-height: 100%;
+    max-height: calc(100% - 40px); /* Ajustado para dejar espacio para los botones */
     display: block;
-    margin: 0; /* Eliminar margen para que se ajuste mejor al padding de la ventana */
+    margin: 0 auto; /* Centrar imagen/video */
     /* Para que el contenido no se salga de la ventana al redimensionar */
     box-sizing: border-box; 
     flex-shrink: 0; /* Asegura que la imagen/video no se encoja en flexbox */
 }
+
+.preview-actions {
+    display: flex;
+    justify-content: space-around;
+    align-items: center;
+    padding: 5px 0;
+    background-color: rgba(34, 34, 34, 0.8);
+    margin-top: 10px; /* Separación del contenido de la previsualización */
+    flex-shrink: 0; /* Evita que los botones se encojan */
+    height: 30px; /* Altura fija para los botones */
+}
+
+.preview-actions button {
+    background-color: #555;
+    color: white;
+    border: none;
+    padding: 5px 8px;
+    border-radius: 3px;
+    cursor: pointer;
+    font-size: 0.8em;
+}
+
+.preview-actions button:hover {
+    background-color: #777;
+}
+
 
 .close-preview-window-button {
     position: absolute;
