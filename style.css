@@ -6,6 +6,7 @@ body {
   display: flex; /* Usamos flexbox para organizar el body */
   flex-direction: column; /* Apila los elementos (cámara y galería) verticalmente */
   min-height: 100vh; /* Asegura que el body ocupe toda la altura de la ventana */
+  overflow-y: auto; /* PERMITE EL SCROLLING PARA VER LA GALERÍA */
 }
 
 #camera-container {
