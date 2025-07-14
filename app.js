@@ -89,6 +89,7 @@ const fsSource = `
     uniform float u_bassAmp;
     uniform float u_midAmp;
     uniform float u_highAmp;
+    uniform float u_aspectRatio;
 
     varying vec2 v_texCoord;
 
@@ -103,7 +104,10 @@ const fsSource = `
     const int FILTER_ANGELICAL_GLITCH = 7;
     const int FILTER_AUDIO_COLOR_SHIFT = 8;
     const int FILTER_MODULAR_COLOR_SHIFT = 9;
-    // Los filtros de silueta serán manejados por MediaPipe en el canvas 2D
+    const int FILTER_KALEIDOSCOPE = 10;
+    const int FILTER_MIRROR = 11;
+    const int FILTER_FISHEYE = 12;
+    // Los filtros de silueta y eco visual serán manejados por MediaPipe en el canvas 2D
 
     // Función para generar ruido básico
     float random(vec2 st) {
@@ -113,6 +117,31 @@ const fsSource = `
     // Función de brillo para detectar luz
     float brightness(vec3 color) {
         return dot(color, vec3(0.299, 0.587, 0.114));
+    }
+
+    // Rotar un punto alrededor del centro
+    vec2 rotate2D(vec2 st, float angle) {
+        st -= 0.5;
+        st = mat2(cos(angle), -sin(angle), sin(angle), cos(angle)) * st;
+        st += 0.5;
+        return st;
+    }
+
+    // Efecto de ojo de pez
+    vec2 fisheye(vec2 uv, float strength) {
+        vec2 centered = uv * 2.0 - 1.0; // Coordenadas de -1 a 1
+        float r = length(centered);
+        float theta = atan(centered.y, centered.x);
+        
+        float r_distorted = r;
+        if (strength > 0.0) { // Convexo
+            r_distorted = r / (1.0 - strength * r);
+        } else { // Cóncavo
+            r_distorted = r * (1.0 + strength * r);
+        }
+        
+        vec2 distorted_centered = vec2(r_distorted * cos(theta), r_distorted * sin(theta));
+        return (distorted_centered + 1.0) * 0.5; // Devolver a 0-1
     }
 
     void main() {
@@ -216,6 +245,24 @@ const fsSource = `
                 finalColor.rgb = mix(color.rgb, palette0, u_bassAmp);
             }
             finalColor.rgb = clamp(finalColor.rgb, 0.0, 1.0);
+        } else if (u_filterType == FILTER_KALEIDOSCOPE) {
+            // Caleidoscopio de 6 sectores
+            vec2 c = texCoord - 0.5;
+            float r = length(c);
+            float angle = atan(c.y, c.x);
+            angle = mod(angle, radians(60.0)); // 360 / 6 = 60 grados por sector
+            angle = abs(angle - radians(30.0)); // Reflejar en el centro del sector
+            
+            vec2 newTexCoord = vec2(r * cos(angle), r * sin(angle)) + 0.5;
+            finalColor = texture2D(u_image, newTexCoord).rgb;
+        } else if (u_filterType == FILTER_MIRROR) {
+            vec2 uv = texCoord;
+            if (uv.x > 0.5) {
+                uv.x = 1.0 - uv.x;
+            }
+            finalColor = texture2D(u_image, uv).rgb;
+        } else if (u_filterType == FILTER_FISHEYE) {
+            finalColor = texture2D(u_image, fisheye(texCoord, 0.8)).rgb; // 0.8 para un efecto convexo fuerte
         }
 
         gl_FragColor = vec4(finalColor, alpha);
@@ -319,6 +366,7 @@ function initWebGL() {
     program.resolutionLocation = gl.getUniformLocation(program, 'u_resolution');
     timeLocation = gl.getUniformLocation(program, 'u_time');
     colorShiftUniformLocation = gl.getUniformLocation(program, 'u_colorShift');
+    program.aspectRatioLocation = gl.getUniformLocation(program, 'u_aspectRatio');
 
     bassAmpUniformLocation = gl.getUniformLocation(program, 'u_bassAmp');
     midAmpUniformLocation = gl.getUniformLocation(program, 'u_midAmp');
@@ -456,6 +504,7 @@ async function startCamera(deviceId) {
         canvas.height = video.videoHeight; // Ajustar también el canvas 2D
         if (gl) {
           gl.viewport(0, 0, glcanvas.width, glcanvas.height);
+          gl.uniform1f(program.aspectRatioLocation, glcanvas.width / glcanvas.height);
         }
       }
       if (!gl) {
@@ -515,10 +564,11 @@ function drawVideoFrame() {
     gl.useProgram(program);
 
     gl.uniform2f(program.resolutionLocation, glcanvas.width, glcanvas.height);
+    gl.uniform1f(program.aspectRatioLocation, glcanvas.width / glcanvas.height); // Pasar el aspect ratio
     const currentTime = performance.now() / 1000.0;
     gl.uniform1f(timeLocation, currentTime);
 
-    const isMediaPipeFilter = ['whiteGlow', 'blackBg', 'whiteBg'].includes(selectedFilter);
+    const isMediaPipeFilter = ['whiteGlow', 'blackBg', 'whiteBg', 'echo-silhouette'].includes(selectedFilter);
 
     if (isMediaPipeFilter && mpResults && mpResults.segmentationMask && mpResults.image) {
         // Renderizar con MediaPipe en el canvas 2D auxiliar
@@ -557,6 +607,23 @@ function drawVideoFrame() {
 
                 mpCanvasCtx.globalCompositeOperation = "destination-over";
                 mpCanvasCtx.drawImage(mpResults.image, 0, 0, canvas.width, canvas.height);
+                break;
+            case "echo-silhouette":
+                // Crear un "eco" de la silueta previa
+                mpCanvasCtx.globalAlpha = 0.5; // Transparencia del eco
+                mpCanvasCtx.drawImage(canvas, 0, 0, canvas.width, canvas.height); // Dibujar el contenido anterior
+                mpCanvasCtx.globalAlpha = 1.0; // Restablecer opacidad para el dibujo actual
+
+                // Dibujar la máscara de segmentación (silueta)
+                mpCanvasCtx.save();
+                mpCanvasCtx.globalCompositeOperation = "source-over"; // Dibuja normalmente
+                // Puedes colorear la silueta si quieres un efecto específico
+                mpCanvasCtx.drawImage(mpResults.segmentationMask, 0, 0, canvas.width, canvas.height);
+                
+                // Dibujar la imagen original dentro de la máscara
+                mpCanvasCtx.globalCompositeOperation = "source-in"; // Mantener solo donde ya hay contenido (la silueta)
+                mpCanvasCtx.drawImage(mpResults.image, 0, 0, canvas.width, canvas.height);
+                mpCanvasCtx.restore();
                 break;
         }
         mpCanvasCtx.globalCompositeOperation = "source-over"; // Resetear para futuros dibujos
@@ -598,6 +665,9 @@ function drawVideoFrame() {
             case 'angelical-glitch': filterIndex = 7; break;
             case 'audio-color-shift': filterIndex = 8; break;
             case 'modular-color-shift': filterIndex = 9; break;
+            case 'kaleidoscope': filterIndex = 10; break;
+            case 'mirror': filterIndex = 11; break;
+            case 'fisheye': filterIndex = 12; break;
             default: filterIndex = 0; break;
         }
         gl.uniform1i(filterTypeLocation, filterIndex);
@@ -608,7 +678,7 @@ function drawVideoFrame() {
 }
 
 function mapValue(value, inMin, inMax, outMin, outMax) {
-    return (value - inMin) * (outMax - outMin) / (inMax - inMin) + outMin;
+    return (value - inMin) * (outMax - outMin) / (inMin - inMin) + outMin;
 }
 
 
