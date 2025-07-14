@@ -456,7 +456,7 @@ async function startCamera(deviceId) {
             analyser = audioContext.createAnalyser();
             analyser.fftSize = 256;
             analyser.smoothingTimeConstant = 0.7;
-            dataArray = new Uint8Array(analyser.frequencyBinCount);
+            dataArray = new Uint8Array(analyser.frequencyBinBinCount);
         }
 
         if (microphone) {
