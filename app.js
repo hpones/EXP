@@ -1,6 +1,6 @@
 let video = document.getElementById('video');
 let glcanvas = document.getElementById('glcanvas');
-let canvas = document.getElementById('canvas'); // Canvas 2D para MediaPipe
+let canvas = document.getElementById('canvas'); // Canvas 2D auxiliar para MediaPipe
 let filterSelect = document.getElementById('filterSelect');
 let captureBtn = document.getElementById('capture-button');
 let recordBtn = document.getElementById('record-button');
@@ -28,12 +28,12 @@ let gl; // Contexto WebGL
 let program; // Programa de shaders
 let positionBuffer; // Buffer para las posiciones de los vértices
 let texCoordBuffer; // Buffer para las coordenadas de textura
-let videoTexture; // Textura donde se cargará el fotograma del video
+let videoTexture; // Textura donde se cargará el fotograma del video (para filtros WebGL)
+let mpOutputTexture; // Nueva textura para el output de MediaPipe (para filtros avanzados)
 let filterTypeLocation; // Ubicación del uniform para el tipo de filtro
 let timeLocation; // Ubicación del uniform para el tiempo (para efectos dinámicos)
-let mpTexture; // Textura para el output de MediaPipe
 
-// --- VARIABLES Y CONFIGURACIÓN DE AUDIO (existente del filtro anterior) ---
+// --- VARIABLES Y CONFIGURACIÓN DE AUDIO ---
 let audioContext;
 let analyser;
 let microphone;
@@ -61,6 +61,7 @@ let selfieSegmentation;
 let mpCamera;
 let mpResults = null; // Para almacenar el último resultado de MediaPipe
 let mpCanvasCtx = canvas.getContext('2d'); // Contexto 2D para el canvas auxiliar
+let mpProcessing = false; // Bandera para controlar si MediaPipe está procesando
 
 // Vertex Shader: define la posición de los vértices y las coordenadas de textura
 const vsSource = `
@@ -277,35 +278,23 @@ function setupQuadBuffers(gl) {
     gl.bufferData(gl.ARRAY_BUFFER, texCoords, gl.STATIC_DRAW);
 }
 
-// Inicializa la textura para el video
-function setupVideoTexture(gl) {
+// Inicializa las texturas
+function setupTextures(gl) {
+    // Textura para el video original (para filtros WebGL)
     videoTexture = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, videoTexture);
-
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
 
-    // Textura para el output de MediaPipe
-    mpTexture = gl.createTexture();
-    gl.bindTexture(gl.TEXTURE_2D, mpTexture);
+    // Textura para el output de MediaPipe (dibujado en el canvas 2D auxiliar)
+    mpOutputTexture = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, mpOutputTexture);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-}
-
-// Actualiza la textura con el fotograma actual del video
-function updateVideoTexture(gl, source) {
-    gl.bindTexture(gl.TEXTURE_2D, videoTexture);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source);
-}
-
-// Actualiza la textura con el output del canvas 2D (MediaPipe)
-function updateMediaPipeTexture(gl, sourceCanvas) {
-    gl.bindTexture(gl.TEXTURE_2D, mpTexture);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, sourceCanvas);
 }
 
 // --- FUNCIÓN DE INICIALIZACIÓN WEBG L ---
@@ -339,7 +328,7 @@ function initWebGL() {
     gl.enableVertexAttribArray(program.texCoordLocation);
 
     setupQuadBuffers(gl);
-    setupVideoTexture(gl); // Prepara ambas texturas aquí
+    setupTextures(gl); // Prepara ambas texturas aquí
 
     gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
     gl.vertexAttribPointer(program.positionLocation, 2, gl.FLOAT, false, 0, 0);
@@ -347,7 +336,7 @@ function initWebGL() {
     gl.bindBuffer(gl.ARRAY_BUFFER, texCoordBuffer);
     gl.vertexAttribPointer(program.texCoordLocation, 2, gl.FLOAT, false, 0, 0);
 
-    gl.uniform1i(program.imageLocation, 0);
+    gl.uniform1i(program.imageLocation, 0); // La textura activa 0 será la que se use
 
     gl.uniform1i(filterTypeLocation, 0);
     console.log('WebGL inicialización completa.');
@@ -359,18 +348,19 @@ function initMediaPipe() {
         locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/${file}`,
     });
 
+    // 0 para modelos generales (rápido), 1 para modelos más grandes (más precisos para segmentación humana)
     selfieSegmentation.setOptions({
-        modelSelection: 1, // 0 para modelos ligeros, 1 para modelos más grandes (más precisos)
+        modelSelection: 1, 
     });
 
     selfieSegmentation.onResults(onMediaPipeResults);
     console.log('MediaPipe SelfieSegmentation inicializado.');
 }
 
-// Callback de MediaPipe
+// Callback de MediaPipe: se llama cuando MediaPipe ha procesado un fotograma
 function onMediaPipeResults(results) {
-    mpResults = results; // Almacenar los resultados para el bucle de renderizado
-    // No dibujar directamente aquí, se dibujará en drawVideoFrame para sincronización
+    mpResults = results; // Almacenar los resultados
+    mpProcessing = false; // Permitir el siguiente envío de fotogramas
 }
 
 // --- LÓGICA DE CÁMARA Y STREAMING ---
@@ -471,12 +461,17 @@ async function startCamera(deviceId) {
       if (!gl) {
         initWebGL();
       }
-      // Inicializar MediaPipe Camera solo una vez que el video esté listo
+      // Inicializar MediaPipe y Camera si no están ya inicializados
+      if (!selfieSegmentation) {
+        initMediaPipe();
+      }
       if (!mpCamera) {
-        initMediaPipe(); // Asegurarse de que MediaPipe esté inicializado
-        mpCamera = new Camera(video.elt, {
+        mpCamera = new Camera(video, { // Pasar el elemento de video directamente
           onFrame: async () => {
-            await selfieSegmentation.send({ image: video.elt });
+            if (!mpProcessing) { // Solo enviar un nuevo frame si el anterior ha sido procesado
+                mpProcessing = true;
+                await selfieSegmentation.send({ image: video });
+            }
           },
           width: video.videoWidth,
           height: video.videoHeight,
@@ -484,7 +479,7 @@ async function startCamera(deviceId) {
         mpCamera.start();
         console.log('MediaPipe Camera inicializada y en marcha.');
       }
-      drawVideoFrame();
+      drawVideoFrame(); // Iniciar el bucle de renderizado
     };
   } catch (err) {
     console.error('startCamera: No se pudo acceder a la cámara/micrófono:', err);
@@ -523,15 +518,15 @@ function drawVideoFrame() {
     const currentTime = performance.now() / 1000.0;
     gl.uniform1f(timeLocation, currentTime);
 
-    // Lógica para filtros WebGL vs MediaPipe
     const isMediaPipeFilter = ['whiteGlow', 'blackBg', 'whiteBg'].includes(selectedFilter);
 
-    if (isMediaPipeFilter && mpResults) {
-        // Renderizar con MediaPipe en el canvas 2D, luego pasar a WebGL
+    if (isMediaPipeFilter && mpResults && mpResults.segmentationMask && mpResults.image) {
+        // Renderizar con MediaPipe en el canvas 2D auxiliar
         mpCanvasCtx.clearRect(0, 0, canvas.width, canvas.height);
         
         switch (selectedFilter) {
             case "whiteGlow":
+                // Código de silueta roja para contorno blanco brillante
                 mpCanvasCtx.save();
                 mpCanvasCtx.filter = "blur(20px)";
                 mpCanvasCtx.globalAlpha = 0.7;
@@ -551,6 +546,7 @@ function drawVideoFrame() {
 
             case "blackBg":
             case "whiteBg":
+                // Código de silueta roja para fondo blanco/negro
                 mpCanvasCtx.fillStyle = selectedFilter === "blackBg" ? "black" : "white";
                 mpCanvasCtx.fillRect(0, 0, canvas.width, canvas.height);
 
@@ -563,17 +559,18 @@ function drawVideoFrame() {
                 mpCanvasCtx.drawImage(mpResults.image, 0, 0, canvas.width, canvas.height);
                 break;
         }
-        mpCanvasCtx.globalCompositeOperation = "source-over"; // Resetear
+        mpCanvasCtx.globalCompositeOperation = "source-over"; // Resetear para futuros dibujos
 
-        updateMediaPipeTexture(gl, canvas); // Actualizar textura con el output 2D
+        // Actualizar la textura WebGL con el contenido del canvas 2D de MediaPipe
         gl.activeTexture(gl.TEXTURE0);
-        gl.bindTexture(gl.TEXTURE_2D, mpTexture); // Usar la textura de MediaPipe
-        gl.uniform1i(filterTypeLocation, 0); // Desactivar filtros WebGL si se usa MediaPipe
+        gl.bindTexture(gl.TEXTURE_2D, mpOutputTexture);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, canvas); // Usa el canvas 2D como fuente
+        gl.uniform1i(filterTypeLocation, 0); // Desactiva los filtros WebGL cuando se usa MediaPipe
     } else {
-        // Renderizar con WebGL directamente
-        updateVideoTexture(gl, video); // Actualizar textura con el video
+        // Renderizar con WebGL directamente usando la textura del video
         gl.activeTexture(gl.TEXTURE0);
-        gl.bindTexture(gl.TEXTURE_2D, videoTexture); // Usar la textura del video
+        gl.bindTexture(gl.TEXTURE_2D, videoTexture);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video); // Usa el video como fuente
 
         if (selectedFilter === 'audio-color-shift') {
             const currentColor = palettes[paletteIndex];
@@ -614,6 +611,7 @@ function mapValue(value, inMin, inMax, outMin, outMax) {
     return (value - inMin) * (outMax - outMin) / (inMax - inMin) + outMin;
 }
 
+
 // --- MANEJADORES DE EVENTOS ---
 captureBtn.addEventListener('click', () => {
     if (!gl || !glcanvas.width || !glcanvas.height) {
@@ -632,16 +630,29 @@ captureBtn.addEventListener('click', () => {
     };
 });
 
+
 recordBtn.addEventListener('click', () => {
   if (!isRecording) {
     chunks = [];
-    let streamToRecord = glcanvas.captureStream();
+    console.log('Iniciando grabación desde glcanvas.captureStream().');
+    let streamToRecord = glcanvas.captureStream(); // Capturar el stream del canvas con los filtros
+    
+    // Si hay audio en el currentStream de la cámara, añadirlo a la grabación
+    const audioTracks = currentStream.getAudioTracks();
+    if (audioTracks.length > 0) {
+        let audioStream = new MediaStream();
+        audioStream.addTrack(audioTracks[0]);
+        streamToRecord.addTrack(audioTracks[0]); // Combina el video del canvas con el audio de la cámara
+    }
+
     mediaRecorder = new MediaRecorder(streamToRecord, { mimeType: 'video/webm; codecs=vp8' });
 
     mediaRecorder.ondataavailable = e => {
       if (e.data.size > 0) chunks.push(e.data);
+      console.log('Datos de video disponibles, tamaño:', e.data.size);
     };
     mediaRecorder.onstop = () => {
+      console.log('Grabación detenida. Chunks capturados:', chunks.length);
       const blob = new Blob(chunks, { type: 'video/webm' });
       const url = URL.createObjectURL(blob);
       let vid = document.createElement('video');
@@ -649,23 +660,27 @@ recordBtn.addEventListener('click', () => {
       vid.controls = true;
       vid.onloadedmetadata = () => {
         vid.play();
+        console.log('Video grabado cargado y reproduciendo.');
       };
-      alert('Video grabado. Se ha guardado en la memoria temporal del navegador, pero la previsualización directa en la galería está deshabilitada por el momento.');
+      addToGallery(vid, 'video'); // Ahora sí se añade el video a la galería
     };
     mediaRecorder.start();
     isRecording = true;
     controls.style.display = 'none';
     recordingControls.style.display = 'flex';
+    console.log('Grabación iniciada.');
   }
 });
 
 pauseBtn.addEventListener('click', () => {
   if (isPaused) {
     mediaRecorder.resume();
-    pauseBtn.textContent = '⏸️';
+    pauseBtn.textContent = 'Pausa'; // Texto de pausa
+    console.log('Grabación reanudada.');
   } else {
     mediaRecorder.pause();
-    pauseBtn.textContent = '▶️';
+    pauseBtn.textContent = 'Reanudar'; // Texto de reanudar
+    console.log('Grabación pausada.');
   }
   isPaused = !isPaused;
 });
@@ -675,22 +690,27 @@ stopBtn.addEventListener('click', () => {
   isRecording = false;
   controls.style.display = 'flex';
   recordingControls.style.display = 'none';
+  console.log('Grabación finalizada.');
 });
 
 filterBtn.addEventListener('click', () => {
   filtersDropdown.style.display = (filtersDropdown.style.display === 'block') ? 'none' : 'block';
+  console.log('Toggle de dropdown de filtros.');
 });
 
 filterSelect.addEventListener('change', () => {
   selectedFilter = filterSelect.value;
   filtersDropdown.style.display = 'none';
+  console.log('Filtro seleccionado manualmente:', selectedFilter);
 });
 
 fullscreenBtn.addEventListener('click', () => {
   if (!document.fullscreenElement) {
     cameraContainer.requestFullscreen();
+    console.log('Solicitando fullscreen.');
   } else {
     document.exitFullscreen();
+    console.log('Saliendo de fullscreen.');
   }
 });
 
@@ -699,42 +719,47 @@ function addToGallery(element, type) {
   container.className = 'gallery-item';
   container.appendChild(element);
 
+  // Event listener para abrir la ventana de previsualización al hacer clic
   element.addEventListener('click', () => {
-        if (type !== 'img') {
-            return;
-        }
-
+        console.log('Creando ventana de previsualización de', type);
+        
         const previewWindow = document.createElement('div');
         previewWindow.className = 'preview-window';
         document.body.appendChild(previewWindow);
 
         const closeButton = document.createElement('span');
-        closeButton.textContent = '✖';
+        closeButton.textContent = 'X'; // Emoji eliminado
         closeButton.className = 'close-preview-window-button';
         previewWindow.appendChild(closeButton);
 
         const clonedElement = element.cloneNode(true);
+        if (type === 'video') {
+            clonedElement.controls = true; // Mostrar controles para videos
+            clonedElement.play(); // Reproducir al abrir
+        }
         previewWindow.appendChild(clonedElement);
 
+        // --- Botones de acción en la previsualización ---
         let previewActions = document.createElement('div');
         previewActions.className = 'preview-actions';
 
         let downloadBtn = document.createElement('button');
-        downloadBtn.textContent = '⬇︎';
+        downloadBtn.textContent = 'Descargar'; // Emoji eliminado
         downloadBtn.onclick = () => {
             const a = document.createElement('a');
             a.href = clonedElement.src;
-            a.download = type === 'img' ? 'foto_preview.png' : 'video_preview.webm';
+            a.download = type === 'img' ? `foto_${Date.now()}.png` : `video_${Date.now()}.webm`; // Nombre único
             a.click();
+            console.log('Descargando desde previsualización', type);
         };
 
         let shareBtn = document.createElement('button');
-        shareBtn.textContent = '✉︎';
+        shareBtn.textContent = 'Compartir'; // Emoji eliminado
         shareBtn.onclick = async () => {
             if (navigator.share) {
                 try {
                     const file = await fetch(clonedElement.src).then(res => res.blob());
-                    const fileName = type === 'img' ? 'foto_preview.png' : 'video_preview.webm';
+                    const fileName = type === 'img' ? `foto_${Date.now()}.png` : `video_${Date.now()}.webm`;
                     const fileType = type === 'img' ? 'image/png' : 'video/webm';
                     const shareData = {
                         files: [new File([file], fileName, { type: fileType })],
@@ -742,22 +767,25 @@ function addToGallery(element, type) {
                         text: '¡Echa un vistazo a lo que hice con Experimental Camera!'
                     };
                     await navigator.share(shareData);
+                    console.log('Contenido compartido exitosamente desde previsualización');
                 } catch (error) {
                     console.error('Error al compartir desde previsualización:', error);
                 }
             } else {
                 alert('La API Web Share no es compatible con este navegador.');
+                console.warn('La API Web Share no es compatible.');
             }
         };
 
         let deleteBtn = document.createElement('button');
-        deleteBtn.textContent = '✖︎';
+        deleteBtn.textContent = 'Eliminar'; // Emoji eliminado
         deleteBtn.onclick = () => {
             if (type === 'video' && clonedElement.src.startsWith('blob:')) {
-                URL.revokeObjectURL(clonedElement.src);
+                URL.revokeObjectURL(clonedElement.src); // Libera la URL del blob para videos
             }
-            previewWindow.remove();
-            container.remove();
+            previewWindow.remove(); // Cierra la ventana de previsualización
+            container.remove(); // Elimina el elemento de la galería
+            console.log('Elemento de galería y previsualización eliminados.');
         };
         
         previewActions.appendChild(downloadBtn);
@@ -766,35 +794,47 @@ function addToGallery(element, type) {
         }
         previewActions.appendChild(deleteBtn);
         previewWindow.appendChild(previewActions);
+        // --- Fin Botones de acción en la previsualización ---
 
+        // Event listener para cerrar la ventana
         closeButton.addEventListener('click', () => {
+            if (type === 'video' && clonedElement) {
+                clonedElement.pause();
+            }
             previewWindow.remove();
+            console.log('Ventana de previsualización cerrada.');
         });
 
+        // Hacer la ventana arrastrable
         let pos1 = 0, pos2 = 0, pos3 = 0, pos4 = 0;
         previewWindow.onmousedown = dragMouseDown;
 
         function dragMouseDown(e) {
             e = e || window.event;
             e.preventDefault();
+            // obtener la posición del cursor en el inicio:
             pos3 = e.clientX;
             pos4 = e.clientY;
             document.onmouseup = closeDragElement;
+            // llamar a una función cada vez que el cursor se mueve:
             document.onmousemove = elementDrag;
         }
 
         function elementDrag(e) {
             e = e || window.event;
             e.preventDefault();
+            // calcular la nueva posición del cursor:
             pos1 = pos3 - e.clientX;
             pos2 = pos4 - e.clientY;
             pos3 = e.clientX;
             pos4 = e.clientY;
+            // establecer la nueva posición del elemento:
             previewWindow.style.top = (previewWindow.offsetTop - pos2) + "px";
             previewWindow.style.left = (previewWindow.offsetLeft - pos1) + "px";
         }
 
         function closeDragElement() {
+            /* dejar de moverse cuando se suelta el botón del ratón: */
             document.onmouseup = null;
             document.onmousemove = null;
         }
@@ -804,21 +844,22 @@ function addToGallery(element, type) {
   actions.className = 'gallery-actions';
 
   let downloadBtn = document.createElement('button');
-  downloadBtn.textContent = '⬇︎';
+  downloadBtn.textContent = 'Descargar';
   downloadBtn.onclick = () => {
     const a = document.createElement('a');
     a.href = element.src;
-    a.download = type === 'img' ? 'foto.png' : 'video.webm';
+    a.download = type === 'img' ? `foto_${Date.now()}.png` : `video_${Date.now()}.webm`;
     a.click();
+    console.log('Descargando', type);
   };
 
   let shareBtn = document.createElement('button');
-  shareBtn.textContent = '✉︎';
+  shareBtn.textContent = 'Compartir';
   shareBtn.onclick = async () => {
     if (navigator.share) {
       try {
         const file = await fetch(element.src).then(res => res.blob());
-        const fileName = type === 'img' ? 'foto.png' : 'video.webm';
+        const fileName = type === 'img' ? `foto_${Date.now()}.png` : `video_${Date.now()}.webm`;
         const fileType = type === 'img' ? 'image/png' : 'video/webm';
         const shareData = {
           files: [new File([file], fileName, { type: fileType })],
@@ -826,21 +867,24 @@ function addToGallery(element, type) {
           text: '¡Echa un vistazo a lo que hice con Experimental Camera!'
         };
         await navigator.share(shareData);
+        console.log('Contenido compartido exitosamente');
       } catch (error) {
         console.error('Error al compartir:', error);
       }
     } else {
       alert('La API Web Share no es compatible con este navegador.');
+      console.warn('La API Web Share no es compatible.');
     }
   };
 
   let deleteBtn = document.createElement('button');
-  deleteBtn.textContent = '✖︎';
+  deleteBtn.textContent = 'Eliminar';
   deleteBtn.onclick = () => {
     if (type === 'video' && element.src.startsWith('blob:')) {
       URL.revokeObjectURL(element.src);
     }
     container.remove();
+    console.log('Elemento de galería eliminado.');
   };
 
   actions.appendChild(downloadBtn);
@@ -853,6 +897,8 @@ function addToGallery(element, type) {
   gallery.prepend(container);
 }
 
+
+// --- LÓGICA DE DOBLE TAP/CLICK PARA CAMBIAR DE CÁMARA ---
 let lastTap = 0;
 const DBL_TAP_THRESHOLD = 300;
 
@@ -888,9 +934,10 @@ function changePaletteIndex() {
     paletteIndex = (paletteIndex + 1) % palettes.length;
 }
 
+// --- LÓGICA DE SWIPE PARA CAMBIAR FILTROS ---
 let touchStartX = 0;
 let touchEndX = 0;
-const SWIPE_THRESHOLD = 50;
+const SWIPE_THRESHOLD = 50; // Pixeles mínimos para considerar un swipe
 
 glcanvas.addEventListener('touchstart', (e) => {
     touchStartX = e.touches[0].clientX;
@@ -904,18 +951,20 @@ glcanvas.addEventListener('touchend', () => {
     const diffX = touchEndX - touchStartX;
 
     if (Math.abs(diffX) > SWIPE_THRESHOLD) {
-        const options = Array.from(filterSelect.options).filter(opt => !opt.parentElement.matches('optgroup')).map(option => option.value); // Filtra solo las opciones
+        // Obtener todas las opciones, incluyendo las de los optgroups
+        const options = Array.from(filterSelect.querySelectorAll('option')).map(option => option.value);
         let currentIndex = options.indexOf(selectedFilter);
 
-        if (diffX > 0) { // Swipe a la derecha
+        if (diffX > 0) { // Swipe a la derecha (filtro anterior)
             currentIndex = (currentIndex > 0) ? currentIndex - 1 : options.length - 1;
-        } else { // Swipe a la izquierda
+        } else { // Swipe a la izquierda (filtro siguiente)
             currentIndex = (currentIndex < options.length - 1) ? currentIndex + 1 : 0;
         }
         
         selectedFilter = options[currentIndex];
-        filterSelect.value = selectedFilter;
+        filterSelect.value = selectedFilter; // Sincroniza el select
     }
+    // Reiniciar valores de touch
     touchStartX = 0;
     touchEndX = 0;
 });
