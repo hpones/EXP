@@ -101,7 +101,7 @@ const fsSource = `
     const int FILTER_SEPIA = 3;
     const int FILTER_ECO_PINK = 4;
     const int FILTER_WEIRD = 5;
-    const int int FILTER_GLOW_OUTLINE = 6;
+    const int FILTER_GLOW_OUTLINE = 6;
     const int FILTER_ANGELICAL_GLITCH = 7;
     const int FILTER_AUDIO_COLOR_SHIFT = 8;
     const int FILTER_MODULAR_COLOR_SHIFT = 9;
@@ -109,7 +109,7 @@ const fsSource = `
     const int FILTER_MIRROR = 11;
     const int FILTER_FISHEYE = 12;
     const int FILTER_RECUERDO = 13; // Filtro "Recuerdo" (original)
-    const int FILTER_MEMORY_RECUERDO = 14; // NUEVO: Fusión Recuerdo + Eco Visual (Post-Processing)
+    const int FILTER_MEMORY_RECUERDO = 14; // Fusión Recuerdo + Eco Visual (Post-Processing)
     // Los filtros de silueta y eco visual serán manejados por MediaPipe en el canvas 2D
 
     // Función para generar ruido básico
@@ -406,27 +406,28 @@ function createProgram(gl, vertexShader, fragmentShader) {
     return program;
 }
 
-// Configura los buffers de un cuadrado que llena el canvas
+// CORRECCIÓN CLAVE: Invertir el orden de los vértices X para corregir el efecto espejo
 function setupQuadBuffers(gl) {
     const positions = new Float32Array([
+        1, -1,  // Cambiado: X de 1 a -1, 
         -1, -1,
-         1, -1,
-        -1,  1,
-        -1,  1,
-         1, -1,
-         1,  1,
+        1,  1,
+        1,  1,
+        -1, -1,
+        -1,  1, // Cambiado
     ]);
     positionBuffer = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
     gl.bufferData(gl.ARRAY_BUFFER, positions, gl.STATIC_DRAW);
 
+    // Las coordenadas de textura deben seguir el nuevo orden de los vértices
     const texCoords = new Float32Array([
-        0, 1,
-        1, 1,
-        0, 0,
-        0, 0,
-        1, 1,
+        1, 1, // Corresponde al nuevo 1, -1 (esquina inferior derecha)
+        0, 1, // Corresponde al nuevo -1, -1 (esquina inferior izquierda)
+        1, 0, // Corresponde al nuevo 1, 1 (esquina superior derecha)
         1, 0,
+        0, 1,
+        0, 0, // Corresponde al nuevo -1, 1 (esquina superior izquierda)
     ]);
     texCoordBuffer = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, texCoordBuffer);
@@ -483,8 +484,8 @@ function initWebGL() {
     gl.enableVertexAttribArray(program.positionLocation);
     gl.enableVertexAttribArray(program.texCoordLocation);
 
-    setupQuadBuffers(gl);
-    setupTextures(gl); // Prepara ambas texturas aquí
+    setupQuadBuffers(gl); // Llama a la función de corrección de espejo
+    setupTextures(gl); 
 
     gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
     gl.vertexAttribPointer(program.positionLocation, 2, gl.FLOAT, false, 0, 0);
@@ -492,7 +493,7 @@ function initWebGL() {
     gl.bindBuffer(gl.ARRAY_BUFFER, texCoordBuffer);
     gl.vertexAttribPointer(program.texCoordLocation, 2, gl.FLOAT, false, 0, 0);
 
-    gl.uniform1i(program.imageLocation, 0); // La textura activa 0 será la que se use
+    gl.uniform1i(program.imageLocation, 0); 
 
     gl.uniform1i(filterTypeLocation, 0);
     console.log('WebGL inicialización completa.');
@@ -623,9 +624,10 @@ async function startCamera(deviceId) {
         initMediaPipe();
       }
       if (!mpCamera) {
-        mpCamera = new Camera(video, { // Pasar el elemento de video directamente
+        // La biblioteca de MediaPipe Camera Utility necesita el video ya cargado
+        mpCamera = new Camera(video, { 
           onFrame: async () => {
-            if (!mpProcessing) { // Solo enviar un nuevo frame si el anterior ha sido procesado
+            if (!mpProcessing) { 
                 mpProcessing = true;
                 await selfieSegmentation.send({ image: video });
             }
@@ -687,41 +689,45 @@ function drawVideoFrame() {
 
         switch (selectedFilter) {
             case "whiteGlow":
-                // Estos filtros necesitan un canvas limpio para el fondo
-                mpCanvasCtx.clearRect(0, 0, canvas.width, canvas.height);
-                // Código de silueta roja para contorno blanco brillante
+                // Corrección: limpiar el canvas antes de dibujar el efecto de silueta
+                mpCanvasCtx.clearRect(0, 0, canvas.width, canvas.height); 
+
+                // 1. Dibujar el contorno brillante (blur)
                 mpCanvasCtx.save();
                 mpCanvasCtx.filter = "blur(20px)";
                 mpCanvasCtx.globalAlpha = 0.7;
-                for (let i = 0; i < 3; i++) {
-                    mpCanvasCtx.drawImage(mpResults.segmentationMask, 0, 0, canvas.width, canvas.height);
-                }
+                mpCanvasCtx.drawImage(mpResults.segmentationMask, 0, 0, canvas.width, canvas.height);
                 mpCanvasCtx.restore();
 
+                // 2. Recortar la imagen original
                 mpCanvasCtx.save();
                 mpCanvasCtx.globalCompositeOperation = "destination-in";
                 mpCanvasCtx.drawImage(mpResults.segmentationMask, 0, 0, canvas.width, canvas.height);
                 mpCanvasCtx.restore();
 
+                // 3. Dibujar el fondo
                 mpCanvasCtx.globalCompositeOperation = "destination-over";
                 mpCanvasCtx.drawImage(mpResults.image, 0, 0, canvas.width, canvas.height);
                 break;
 
             case "blackBg":
             case "whiteBg":
-                // Estos filtros necesitan un canvas limpio para el fondo
+                // Corrección: limpiar el canvas antes de dibujar el fondo
                 mpCanvasCtx.clearRect(0, 0, canvas.width, canvas.height);
-                // Código de silueta roja para fondo blanco/negro
+                
+                // 1. Dibujar el fondo de color
                 mpCanvasCtx.fillStyle = selectedFilter === "blackBg" ? "black" : "white";
                 mpCanvasCtx.fillRect(0, 0, canvas.width, canvas.height);
 
+                // 2. Recortar la máscara de segmentación (silueta)
                 mpCanvasCtx.save();
                 mpCanvasCtx.globalCompositeOperation = "destination-in";
                 mpCanvasCtx.drawImage(mpResults.segmentationMask, 0, 0, canvas.width, canvas.height);
                 mpCanvasCtx.restore();
 
-                mpCanvasCtx.globalCompositeOperation = "destination-over";
-                mpCanvasCtx.drawImage(mpResults.image, 0, 0, canvas.width, canvas.height);
+                // 3. Dibujar la imagen original (video) en el área de la silueta
+                mpCanvasCtx.globalCompositeOperation = "source-over"; // Cambio de source-over a source-atop si solo queremos el personaje
+                mpCanvasCtx.drawImage(mpResults.image, 0, 0, canvas.width, canvas.height); 
                 break;
                 
             case "memory": // NUEVO FILTRO "Memory" (Fusión Eco Visual + Recuerdo)
@@ -730,19 +736,13 @@ function drawVideoFrame() {
                 mpCanvasCtx.globalCompositeOperation = "source-over";
                 
                 // Dibuja el contenido anterior con baja opacidad para crear el trail, manteniendo el fondo.
-                mpCanvasCtx.globalAlpha = 0.8; // Opacidad de desvanecimiento (trail)
-                mpCanvasCtx.drawImage(canvas, 0, 0, canvas.width, canvas.height); // Dibuja el contenido anterior (el trail)
+                // Corrección: Dibuja el contenido anterior (trail) sobre sí mismo
+                mpCanvasCtx.globalAlpha = 0.8; 
+                mpCanvasCtx.drawImage(canvas, 0, 0, canvas.width, canvas.height); 
 
                 // 2. Dibujar el fotograma original (video) encima con opacidad completa
                 mpCanvasCtx.globalAlpha = 1.0;
                 mpCanvasCtx.drawImage(mpResults.image, 0, 0, canvas.width, canvas.height);
-                
-                // 3. Aplicar un tinte sutil (opcional para mantener tonalidad de eco visual si es necesario)
-                // En este caso, confiamos en el post-proceso de WebGL, pero mantenemos una base para el trail.
-                // Si quieres un tinte fuerte aquí:
-                // mpCanvasCtx.globalCompositeOperation = "multiply";
-                // mpCanvasCtx.fillStyle = "rgba(180, 160, 200, 0.2)"; // Tinte violeta/rosa
-                // mpCanvasCtx.fillRect(0, 0, canvas.width, canvas.height);
                 
                 mpCanvasCtx.restore();
                 
@@ -778,6 +778,7 @@ function drawVideoFrame() {
             gl.uniform1f(highAmpUniformLocation, highAmp);
         }
 
+        // CORRECCIÓN CLAVE: Asegurarse de que el índice del filtro coincida con la constante en el shader
         let filterIndex = 0;
         switch (selectedFilter) {
             case 'grayscale': filterIndex = 1; break;
