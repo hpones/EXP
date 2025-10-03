@@ -22,7 +22,7 @@ let isPaused = false;
 let selectedFilter = 'none';
 let currentCameraDeviceId = null;
 let currentFacingMode = null;
-let mediaCounter = 0; // NUEVO: Contador para enumerar las fotos y videos
+let mediaCounter = 0; // Contador para enumerar las fotos y videos
 
 // --- VARIABLES Y CONFIGURACIÓN DE WEBG L ---
 let gl; // Contexto WebGL
@@ -108,6 +108,7 @@ const fsSource = `
     const int FILTER_KALEIDOSCOPE = 10;
     const int FILTER_MIRROR = 11;
     const int FILTER_FISHEYE = 12;
+    const int FILTER_RECUERDO = 13; // NUEVO: Filtro "Recuerdo"
     // Los filtros de silueta y eco visual serán manejados por MediaPipe en el canvas 2D
 
     // Función para generar ruido básico
@@ -264,6 +265,58 @@ const fsSource = `
             finalColor = texture2D(u_image, uv).rgb;
         } else if (u_filterType == FILTER_FISHEYE) {
             finalColor = texture2D(u_image, fisheye(texCoord, 0.8)).rgb; // 0.8 para un efecto convexo fuerte
+        } else if (u_filterType == FILTER_RECUERDO) {
+            vec2 uv = texCoord;
+            
+            // 1. Distorsión amorfa/Oscilación lenta (bordes)
+            float wobble = sin(u_time * 0.5) * 0.005; 
+            uv.x += sin(uv.y * 10.0 + u_time * 2.0) * wobble;
+            uv.y += cos(uv.x * 12.0 + u_time * 1.5) * wobble;
+
+            // 2. Ruido visual (Grano)
+            float grain = random(uv * u_time) * 0.1; 
+            
+            // 3. Capa borrosa y Punto de enfoque
+            vec2 center = vec2(0.5, 0.5);
+            float dist = distance(uv, center);
+            
+            // Controla el nivel de nitidez (0.2 es el radio nítido, 0.5 es el área de transición)
+            float focus = smoothstep(0.5, 0.2, dist * 2.0); 
+            
+            // Texturas muestreadas con offset para simular desenfoque
+            vec2 onePixel = 1.0 / u_resolution;
+            vec4 blurredColor = (
+                texture2D(u_image, uv + onePixel * 2.0) +
+                texture2D(u_image, uv - onePixel * 2.0) +
+                texture2D(u_image, uv + vec2(onePixel.x, -onePixel.y) * 2.0) +
+                texture2D(u_image, uv - vec2(onePixel.x, -onePixel.y) * 2.0)
+            ) / 4.0;
+
+            // Mezclar entre el color original (nítido) y el borroso usando 'focus'
+            vec4 finalColorMixed = mix(blurredColor, texture2D(u_image, uv), focus);
+
+            // 4. Aplicar Color (Tonos lavados / Sobreexposición leve)
+            finalColor = finalColorMixed.rgb * vec3(1.1, 1.05, 0.9); 
+
+            // 5. Aplicar Sepia (tonos lavados)
+            float r = finalColor.r;
+            float g = finalColor.g;
+            float b = finalColor.b;
+            
+            // Fórmula Sepia clásica, pero atenuada (0.5 de mezcla)
+            float sepiaR = (r * 0.393) + (g * 0.769) + (b * 0.189);
+            float sepiaG = (r * 0.349) + (g * 0.686) + (b * 0.168);
+            float sepiaB = (r * 0.272) + (g * 0.534) + (b * 0.131);
+            
+            vec3 sepiaColor = clamp(vec3(sepiaR, sepiaG, sepiaB), 0.0, 1.0);
+            
+            // Mezclar el color y el sepia para un efecto "lavado"
+            finalColor = mix(finalColor, sepiaColor, 0.5); 
+            
+            // 6. Aplicar Ruido
+            finalColor += grain;
+            
+            finalColor = clamp(finalColor, 0.0, 1.0); 
         }
 
         gl_FragColor = vec4(finalColor, alpha);
@@ -669,6 +722,7 @@ function drawVideoFrame() {
             case 'kaleidoscope': filterIndex = 10; break;
             case 'mirror': filterIndex = 11; break;
             case 'fisheye': filterIndex = 12; break;
+            case 'recuerdo': filterIndex = 13; break; // NUEVO: Añadir filtro Recuerdo
             default: filterIndex = 0; break;
         }
         gl.uniform1i(filterTypeLocation, filterIndex);
