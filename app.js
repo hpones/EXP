@@ -268,10 +268,10 @@ const fsSource = `
         } else if (u_filterType == FILTER_RECUERDO || u_filterType == FILTER_MEMORY_RECUERDO) {
             vec2 uv = texCoord;
             
-            // 1. Distorsión amorfa/Oscilación MÁS fuerte
-            float wobble = sin(u_time * 0.8) * 0.018; // Aumentado para mayor deformación
-            uv.x += sin(uv.y * 20.0 + u_time * 3.0) * wobble; // Aumentada frecuencia (más caótico)
-            uv.y += cos(uv.x * 22.0 + u_time * 2.5) * wobble; // Aumentada frecuencia (más caótico)
+            // 1. Distorsión amorfa/Oscilación MÁS fuerte (wobble=0.018)
+            float wobble = sin(u_time * 0.8) * 0.018; 
+            uv.x += sin(uv.y * 20.0 + u_time * 3.0) * wobble; 
+            uv.y += cos(uv.x * 22.0 + u_time * 2.5) * wobble; 
 
             // 2. Ruido visual (Grano)
             float grain = random(uv * u_time) * 0.1; 
@@ -694,12 +694,12 @@ function drawVideoFrame() {
                 mpCanvasCtx.globalCompositeOperation = "source-over";
                 
                 // **Eco/Lag fuerte en la figura** (opacidad baja en el frame anterior: 0.8)
-                // Si la figura se mueve, su rastro de frames anteriores se verá con 20% de opacidad (1.0 - 0.8).
+                // Esto genera un rastro visible en cualquier cosa que se mueva (principalmente la figura).
                 mpCanvasCtx.globalAlpha = 0.8; 
                 mpCanvasCtx.drawImage(canvas, 0, 0, canvas.width, canvas.height); 
                 
                 // 2. Dibujar el fotograma original (video) encima con opacidad completa.
-                // Esto asegura que la figura actual sea nítida y el rastro (lag) sea visible.
+                // Esto asegura que la figura actual sea nítida y el rastro (lag) sea visible justo detrás.
                 mpCanvasCtx.globalAlpha = 1.0;
                 mpCanvasCtx.globalCompositeOperation = "source-over";
                 mpCanvasCtx.drawImage(mpResults.image, 0, 0, canvas.width, canvas.height);
@@ -1132,7 +1132,10 @@ glcanvas.addEventListener('touchend', () => {
             currentIndex = (currentIndex > 0) ? currentIndex - 1 : options.length - 1;
         } else { // Swipe a la izquierda (filtro siguiente)
             currentIndex = (currentIndex < options.length - 1) ? currentIndex + 1 : 0;
-        }\n        \n        selectedFilter = options[currentIndex];\n        filterSelect.value = selectedFilter; // Sincroniza el select
+        }
+        
+        selectedFilter = options[currentIndex];
+        filterSelect.value = selectedFilter; // Sincroniza el select
     }
     // Reiniciar valores de touch
     touchStartX = 0;
