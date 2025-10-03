@@ -13,7 +13,9 @@
   <div id="camera-container">
     <video id="video" autoplay playsinline muted></video>
     <canvas id="glcanvas"></canvas>
-    <canvas id="canvas" style="display:none;"></canvas> <div id="controls">
+    <canvas id="canvas" style="display:none;"></canvas> 
+    
+    <div id="controls">
       <button id="capture-button" class="circle white"></button>
       <button id="record-button" class="circle red"></button>
       <button id="filter-button" class="circle yellow"></button>
@@ -42,7 +44,7 @@
           <option value="kaleidoscope">Caleidoscopio</option>
           <option value="mirror">Espejo</option>
           <option value="fisheye">Ojo de pez Convexo</option>
-        </optgroup>
+          <option value="recuerdo">Recuerdo</option> </optgroup>
         <optgroup label="Filtros Avanzados (MediaPipe)">
           <option value="whiteGlow">Silueta roja</option>
           <option value="blackBg">Silueta negra</option>
@@ -54,8 +56,8 @@
   </div>
 
   <div id="gallery">
-  </div>
-
+    </div>
+  
   <script src="app.js"></script>
 </body>
 </html>
