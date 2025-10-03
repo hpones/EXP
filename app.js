@@ -108,9 +108,8 @@ const fsSource = `
     const int FILTER_KALEIDOSCOPE = 10;
     const int FILTER_MIRROR = 11;
     const int FILTER_FISHEYE = 12;
-    const int FILTER_RECUERDO = 13; // Filtro "Recuerdo" (original)
-    const int FILTER_MEMORY_RECUERDO = 14; // Fusión Recuerdo + Eco Visual (Post-Processing)
-    // Los filtros de silueta y eco visual serán manejados por MediaPipe en el canvas 2D
+    const int FILTER_RECUERDO = 13; // Filtro "Recuerdo" (WebGL puro)
+    const int FILTER_MEMORY_RECUERDO = 14; // Post-proceso para Eco Visual (MediaPipe)
 
     // Función para generar ruido básico
     float random(vec2 st) {
@@ -266,23 +265,23 @@ const fsSource = `
             finalColor = texture2D(u_image, uv).rgb;
         } else if (u_filterType == FILTER_FISHEYE) {
             finalColor = texture2D(u_image, fisheye(texCoord, 0.8)).rgb; // 0.8 para un efecto convexo fuerte
-        } else if (u_filterType == FILTER_RECUERDO) {
+        } else if (u_filterType == FILTER_RECUERDO || u_filterType == FILTER_MEMORY_RECUERDO) {
             vec2 uv = texCoord;
             
-            // 1. Distorsión amorfa/Oscilación lenta (bordes)
-            float wobble = sin(u_time * 0.5) * 0.005; 
-            uv.x += sin(uv.y * 10.0 + u_time * 2.0) * wobble;
-            uv.y += cos(uv.x * 12.0 + u_time * 1.5) * wobble;
+            // 1. Distorsión amorfa/Oscilación MÁS fuerte
+            float wobble = sin(u_time * 0.8) * 0.018; // Aumentado para mayor deformación
+            uv.x += sin(uv.y * 20.0 + u_time * 3.0) * wobble; // Aumentada frecuencia (más caótico)
+            uv.y += cos(uv.x * 22.0 + u_time * 2.5) * wobble; // Aumentada frecuencia (más caótico)
 
             // 2. Ruido visual (Grano)
             float grain = random(uv * u_time) * 0.1; 
             
-            // 3. Capa borrosa y Punto de enfoque
+            // 3. Capa borrosa y Punto de enfoque MÁS COMPRIMIDO
             vec2 center = vec2(0.5, 0.5);
             float dist = distance(uv, center);
             
-            // Controla el nivel de nitidez (0.2 es el radio nítido, 0.5 es el área de transición)
-            float focus = smoothstep(0.5, 0.2, dist * 2.0); 
+            // Más foco central (0.4 y 0.2), más difusión en periferia (2.5)
+            float focus = smoothstep(0.4, 0.2, dist * 2.5); 
             
             // Texturas muestreadas con offset para simular desenfoque
             vec2 onePixel = 1.0 / u_resolution;
@@ -304,67 +303,12 @@ const fsSource = `
             float g = finalColor.g;
             float b = finalColor.b;
             
-            // Fórmula Sepia clásica, pero atenuada (0.5 de mezcla)
             float sepiaR = (r * 0.393) + (g * 0.769) + (b * 0.189);
             float sepiaG = (r * 0.349) + (g * 0.686) + (b * 0.168);
             float sepiaB = (r * 0.272) + (g * 0.534) + (b * 0.131);
             
             vec3 sepiaColor = clamp(vec3(sepiaR, sepiaG, sepiaB), 0.0, 1.0);
             
-            // Mezclar el color y el sepia para un efecto "lavado"
-            finalColor = mix(finalColor, sepiaColor, 0.5); 
-            
-            // 6. Aplicar Ruido
-            finalColor += grain;
-            
-            finalColor = clamp(finalColor, 0.0, 1.0); 
-        } else if (u_filterType == FILTER_MEMORY_RECUERDO) {
-            // Lógica de Recuerdo aplicada al output del Eco Visual (Post-Processing)
-            vec2 uv = texCoord;
-            
-            // 1. Distorsión amorfa/Oscilación lenta (bordes)
-            float wobble = sin(u_time * 0.5) * 0.005; 
-            uv.x += sin(uv.y * 10.0 + u_time * 2.0) * wobble;
-            uv.y += cos(uv.x * 12.0 + u_time * 1.5) * wobble;
-
-            // 2. Ruido visual (Grano)
-            float grain = random(uv * u_time) * 0.1; 
-            
-            // 3. Capa borrosa y Punto de enfoque
-            vec2 center = vec2(0.5, 0.5);
-            float dist = distance(uv, center);
-            
-            // Controla el nivel de nitidez (0.2 es el radio nítido, 0.5 es el área de transición)
-            float focus = smoothstep(0.5, 0.2, dist * 2.0); 
-            
-            // Texturas muestreadas con offset para simular desenfoque
-            vec2 onePixel = 1.0 / u_resolution;
-            vec4 blurredColor = (
-                texture2D(u_image, uv + onePixel * 2.0) +
-                texture2D(u_image, uv - onePixel * 2.0) +
-                texture2D(u_image, uv + vec2(onePixel.x, -onePixel.y) * 2.0) +
-                texture2D(u_image, uv - vec2(onePixel.x, -onePixel.y) * 2.0)
-            ) / 4.0;
-
-            // Mezclar entre el color original (nítido) y el borroso usando 'focus'
-            vec4 finalColorMixed = mix(blurredColor, texture2D(u_image, uv), focus);
-
-            // 4. Aplicar Color (Tonos lavados / Sobreexposición leve) - Mantiene la paleta del eco visual
-            finalColor = finalColorMixed.rgb * vec3(1.1, 1.05, 0.9); 
-
-            // 5. Aplicar Sepia (tonos lavados)
-            float r = finalColor.r;
-            float g = finalColor.g;
-            float b = finalColor.b;
-            
-            // Fórmula Sepia clásica, pero atenuada (0.5 de mezcla)
-            float sepiaR = (r * 0.393) + (g * 0.769) + (b * 0.189);
-            float sepiaG = (r * 0.349) + (g * 0.686) + (b * 0.168);
-            float sepiaB = (r * 0.272) + (g * 0.534) + (b * 0.131);
-            
-            vec3 sepiaColor = clamp(vec3(sepiaR, sepiaG, sepiaB), 0.0, 1.0);
-            
-            // Mezclar el color y el sepia para un efecto "lavado"
             finalColor = mix(finalColor, sepiaColor, 0.5); 
             
             // 6. Aplicar Ruido
@@ -406,15 +350,15 @@ function createProgram(gl, vertexShader, fragmentShader) {
     return program;
 }
 
-// CORRECCIÓN CLAVE: Invertir el orden de los vértices X para corregir el efecto espejo
+// CORRECCIÓN DE CÁMARA INVERTIDA: Invertir el orden de los vértices X para corregir el efecto espejo
 function setupQuadBuffers(gl) {
     const positions = new Float32Array([
-        1, -1,  // Cambiado: X de 1 a -1, 
+        1, -1, 
         -1, -1,
         1,  1,
         1,  1,
         -1, -1,
-        -1,  1, // Cambiado
+        -1,  1, 
     ]);
     positionBuffer = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
@@ -422,12 +366,12 @@ function setupQuadBuffers(gl) {
 
     // Las coordenadas de textura deben seguir el nuevo orden de los vértices
     const texCoords = new Float32Array([
-        1, 1, // Corresponde al nuevo 1, -1 (esquina inferior derecha)
-        0, 1, // Corresponde al nuevo -1, -1 (esquina inferior izquierda)
-        1, 0, // Corresponde al nuevo 1, 1 (esquina superior derecha)
+        1, 1, 
+        0, 1, 
+        1, 0, 
         1, 0,
         0, 1,
-        0, 0, // Corresponde al nuevo -1, 1 (esquina superior izquierda)
+        0, 0, 
     ]);
     texCoordBuffer = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, texCoordBuffer);
@@ -484,7 +428,7 @@ function initWebGL() {
     gl.enableVertexAttribArray(program.positionLocation);
     gl.enableVertexAttribArray(program.texCoordLocation);
 
-    setupQuadBuffers(gl); // Llama a la función de corrección de espejo
+    setupQuadBuffers(gl); // Llama a la función con la corrección de espejo
     setupTextures(gl); 
 
     gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
@@ -582,7 +526,7 @@ async function startCamera(deviceId) {
             analyser = audioContext.createAnalyser();
             analyser.fftSize = 256;
             analyser.smoothingTimeConstant = 0.7;
-            dataArray = new Uint8Array(analyser.frequencyBinBinCount);
+            dataArray = new Uint8Array(analyser.frequencyBinCount);
         }
 
         if (microphone) {
@@ -624,10 +568,9 @@ async function startCamera(deviceId) {
         initMediaPipe();
       }
       if (!mpCamera) {
-        // La biblioteca de MediaPipe Camera Utility necesita el video ya cargado
-        mpCamera = new Camera(video, { 
+        mpCamera = new Camera(video, { // Pasar el elemento de video directamente
           onFrame: async () => {
-            if (!mpProcessing) { 
+            if (!mpProcessing) { // Solo enviar un nuevo frame si el anterior ha sido procesado
                 mpProcessing = true;
                 await selfieSegmentation.send({ image: video });
             }
@@ -667,7 +610,7 @@ function drawVideoFrame() {
             changePaletteIndex();
         }
     }
-    // --- Fin detección de nivel de audio ---
+    // --- Fin detección de nivel de nivel de audio ---
 
     gl.clearColor(0.0, 0.0, 0.0, 1.0);
     gl.clear(gl.COLOR_BUFFER_BIT);
@@ -678,13 +621,11 @@ function drawVideoFrame() {
     const currentTime = performance.now() / 1000.0;
     gl.uniform1f(timeLocation, currentTime);
 
-    // [MODIFICACIÓN] Incluir 'memory' en los filtros de MediaPipe
-    const isMediaPipeFilter = ['whiteGlow', 'blackBg', 'whiteBg', 'memory'].includes(selectedFilter);
+    const isMediaPipeFilter = ['whiteGlow', 'blackBg', 'whiteBg', 'echo-silhouette', 'memory-echo'].includes(selectedFilter);
 
     if (isMediaPipeFilter && mpResults && mpResults.segmentationMask && mpResults.image) {
         // Renderizar con MediaPipe en el canvas 2D auxiliar
         
-        // Determinar qué filtro WebGL aplicar después (post-proceso)
         let postProcessFilterIndex = 0; // Por defecto: FILTER_NONE
 
         switch (selectedFilter) {
@@ -726,27 +667,46 @@ function drawVideoFrame() {
                 mpCanvasCtx.restore();
 
                 // 3. Dibujar la imagen original (video) en el área de la silueta
-                mpCanvasCtx.globalCompositeOperation = "source-over"; // Cambio de source-over a source-atop si solo queremos el personaje
+                mpCanvasCtx.globalCompositeOperation = "source-over";
                 mpCanvasCtx.drawImage(mpResults.image, 0, 0, canvas.width, canvas.height); 
                 break;
                 
-            case "memory": // NUEVO FILTRO "Memory" (Fusión Eco Visual + Recuerdo)
-                // 1. Crear el eco/trail del fondo (Fusión con "Eco visual" + Corrección de fondo)
+            case "echo-silhouette":
+                // Crear un "eco" de la silueta previa
+                mpCanvasCtx.globalAlpha = 0.5; // Transparencia del eco
+                mpCanvasCtx.drawImage(canvas, 0, 0, canvas.width, canvas.height); // Dibujar el contenido anterior
+                mpCanvasCtx.globalAlpha = 1.0; // Restablecer opacidad para el dibujo actual
+
+                // Dibujar la máscara de segmentación (silueta)
+                mpCanvasCtx.save();
+                mpCanvasCtx.globalCompositeOperation = "source-over"; // Dibuja normalmente
+                mpCanvasCtx.drawImage(mpResults.segmentationMask, 0, 0, canvas.width, canvas.height);
+                
+                // Dibujar la imagen original dentro de la máscara
+                mpCanvasCtx.globalCompositeOperation = "source-in"; // Mantener solo donde ya hay contenido (la silueta)
+                mpCanvasCtx.drawImage(mpResults.image, 0, 0, canvas.width, canvas.height);
+                mpCanvasCtx.restore();
+                break;
+            
+            case "memory-echo": // MODIFICADO: Eco Visual (Lag) en la FIGURA + Recuerdo Post-Proceso
+                // 1. Aplicar un Eco General (Lag) al canvas existente. Esto hace que la figura en movimiento deje un rastro.
                 mpCanvasCtx.save();
                 mpCanvasCtx.globalCompositeOperation = "source-over";
                 
-                // Dibuja el contenido anterior con baja opacidad para crear el trail, manteniendo el fondo.
-                // Corrección: Dibuja el contenido anterior (trail) sobre sí mismo
+                // **Eco/Lag fuerte en la figura** (opacidad baja en el frame anterior: 0.8)
+                // Si la figura se mueve, su rastro de frames anteriores se verá con 20% de opacidad (1.0 - 0.8).
                 mpCanvasCtx.globalAlpha = 0.8; 
                 mpCanvasCtx.drawImage(canvas, 0, 0, canvas.width, canvas.height); 
-
-                // 2. Dibujar el fotograma original (video) encima con opacidad completa
+                
+                // 2. Dibujar el fotograma original (video) encima con opacidad completa.
+                // Esto asegura que la figura actual sea nítida y el rastro (lag) sea visible.
                 mpCanvasCtx.globalAlpha = 1.0;
+                mpCanvasCtx.globalCompositeOperation = "source-over";
                 mpCanvasCtx.drawImage(mpResults.image, 0, 0, canvas.width, canvas.height);
                 
                 mpCanvasCtx.restore();
                 
-                // Post-Proceso WebGL para aplicar la tonalidad y efectos de "Recuerdo"
+                // Post-Proceso WebGL para aplicar la tonalidad, distorsión y foco de "Recuerdo"
                 postProcessFilterIndex = 14; // Usar FILTER_MEMORY_RECUERDO
                 break;
         }
@@ -778,7 +738,6 @@ function drawVideoFrame() {
             gl.uniform1f(highAmpUniformLocation, highAmp);
         }
 
-        // CORRECCIÓN CLAVE: Asegurarse de que el índice del filtro coincida con la constante en el shader
         let filterIndex = 0;
         switch (selectedFilter) {
             case 'grayscale': filterIndex = 1; break;
@@ -793,7 +752,7 @@ function drawVideoFrame() {
             case 'kaleidoscope': filterIndex = 10; break;
             case 'mirror': filterIndex = 11; break;
             case 'fisheye': filterIndex = 12; break;
-            case 'recuerdo': filterIndex = 13; break; 
+            case 'recuerdo': filterIndex = 13; break; // Filtro Recuerdo
             default: filterIndex = 0; break;
         }
         gl.uniform1i(filterTypeLocation, filterIndex);
@@ -910,7 +869,6 @@ fullscreenBtn.addEventListener('click', () => {
   }
 });
 
-// --- FUNCIÓN addToGallery MODIFICADA PARA ENUMERACIÓN ---
 function addToGallery(element, type) {
     // 1. Incrementar contador y crear título enumerado
     mediaCounter++;
@@ -938,7 +896,7 @@ function addToGallery(element, type) {
         document.body.appendChild(previewWindow);
 
         const closeButton = document.createElement('span');
-        closeButton.textContent = 'X'; // Emoji eliminado
+        closeButton.textContent = 'X'; 
         closeButton.className = 'close-preview-window-button';
         previewWindow.appendChild(closeButton);
 
@@ -954,7 +912,7 @@ function addToGallery(element, type) {
         previewActions.className = 'preview-actions';
 
         let downloadBtn = document.createElement('button');
-        downloadBtn.textContent = 'Descargar'; // Emoji eliminado
+        downloadBtn.textContent = 'Descargar'; 
         downloadBtn.onclick = () => {
             const a = document.createElement('a');
             a.href = clonedElement.src;
@@ -966,7 +924,7 @@ function addToGallery(element, type) {
         };
 
         let shareBtn = document.createElement('button');
-        shareBtn.textContent = 'Compartir'; // Emoji eliminado
+        shareBtn.textContent = 'Compartir'; 
         shareBtn.onclick = async () => {
             if (navigator.share) {
                 try {
@@ -990,7 +948,7 @@ function addToGallery(element, type) {
         };
 
         let deleteBtn = document.createElement('button');
-        deleteBtn.textContent = 'Eliminar'; // Emoji eliminado
+        deleteBtn.textContent = 'Eliminar'; 
         deleteBtn.onclick = () => {
             if (type === 'video' && clonedElement.src.startsWith('blob:')) {
                 URL.revokeObjectURL(clonedElement.src); // Libera la URL del blob para videos
@@ -1174,10 +1132,7 @@ glcanvas.addEventListener('touchend', () => {
             currentIndex = (currentIndex > 0) ? currentIndex - 1 : options.length - 1;
         } else { // Swipe a la izquierda (filtro siguiente)
             currentIndex = (currentIndex < options.length - 1) ? currentIndex + 1 : 0;
-        }
-        
-        selectedFilter = options[currentIndex];
-        filterSelect.value = selectedFilter; // Sincroniza el select
+        }\n        \n        selectedFilter = options[currentIndex];\n        filterSelect.value = selectedFilter; // Sincroniza el select
     }
     // Reiniciar valores de touch
     touchStartX = 0;
@@ -1185,8 +1140,6 @@ glcanvas.addEventListener('touchend', () => {
 });
 
 // --- CORRECCIÓN DE GESTO: EVITAR CAMBIO DE FILTRO POR TAP/CLICK ---
-// Este listener detiene el evento 'click' en el canvas WebGL para asegurar que solo
-// la lógica de 'swipe' (detectada en touchend/touchmove) cambie los filtros.
 glcanvas.addEventListener('click', (e) => {
     e.preventDefault();
     e.stopPropagation();
