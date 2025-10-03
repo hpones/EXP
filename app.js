@@ -108,8 +108,7 @@ const fsSource = `
     const int FILTER_KALEIDOSCOPE = 10;
     const int FILTER_MIRROR = 11;
     const int FILTER_FISHEYE = 12;
-    const int FILTER_RECUERDO = 13; // Filtro "Recuerdo" (WebGL puro)
-    const int FILTER_MEMORY_RECUERDO = 14; // Post-proceso para Eco Visual (MediaPipe)
+    const int FILTER_RECUERDO = 13; // Filtro "Recuerdo" (WebGL puro y post-proceso)
 
     // Función para generar ruido básico
     float random(vec2 st) {
@@ -265,35 +264,42 @@ const fsSource = `
             finalColor = texture2D(u_image, uv).rgb;
         } else if (u_filterType == FILTER_FISHEYE) {
             finalColor = texture2D(u_image, fisheye(texCoord, 0.8)).rgb; // 0.8 para un efecto convexo fuerte
-        } else if (u_filterType == FILTER_RECUERDO || u_filterType == FILTER_MEMORY_RECUERDO) {
+        } else if (u_filterType == FILTER_RECUERDO) {
             vec2 uv = texCoord;
             
-            // 1. Distorsión amorfa/Oscilación MÁS fuerte (wobble=0.018)
-            float wobble = sin(u_time * 0.8) * 0.018; 
+            // 1. Distorsión amorfa/Oscilación MÁS SUAVE (wobble=0.01)
+            float wobble = sin(u_time * 0.8) * 0.01; // Menor deformación
             uv.x += sin(uv.y * 20.0 + u_time * 3.0) * wobble; 
             uv.y += cos(uv.x * 22.0 + u_time * 2.5) * wobble; 
 
             // 2. Ruido visual (Grano)
             float grain = random(uv * u_time) * 0.1; 
             
-            // 3. Capa borrosa y Punto de enfoque MÁS COMPRIMIDO
+            // 3. Desenfoque Radial y Punto de enfoque MÁS COMPRIMIDO
             vec2 center = vec2(0.5, 0.5);
-            float dist = distance(uv, center);
+            vec2 direction = uv - center;
+            float dist = length(direction);
             
-            // Más foco central (0.4 y 0.2), más difusión en periferia (2.5)
+            // Enfoque/Máscara de la zona nítida
             float focus = smoothstep(0.4, 0.2, dist * 2.5); 
-            
-            // Texturas muestreadas con offset para simular desenfoque
-            vec2 onePixel = 1.0 / u_resolution;
-            vec4 blurredColor = (
-                texture2D(u_image, uv + onePixel * 2.0) +
-                texture2D(u_image, uv - onePixel * 2.0) +
-                texture2D(u_image, uv + vec2(onePixel.x, -onePixel.y) * 2.0) +
-                texture2D(u_image, uv - vec2(onePixel.x, -onePixel.y) * 2.0)
-            ) / 4.0;
 
-            // Mezclar entre el color original (nítido) y el borroso usando 'focus'
-            vec4 finalColorMixed = mix(blurredColor, texture2D(u_image, uv), focus);
+            // Implementación de Desenfoque Radial
+            vec4 blurredColor = vec4(0.0);
+            
+            const float blurSamples = 8.0;
+            float blurStrength = (1.0 - focus) * 0.015; // La fuerza del blur es inversamente proporcional al foco
+            
+            // Muestreo radial a lo largo de la dirección
+            for (float i = 0.0; i < blurSamples; i++) {
+                // Offset a lo largo del vector "direction"
+                vec2 offset = direction * blurStrength * (i / blurSamples); 
+                blurredColor += texture2D(u_image, uv + offset);
+            }
+            blurredColor /= blurSamples;
+
+            // Mezclar entre el color borroso y el original (nítido) usando 'focus'
+            vec4 originalColor = texture2D(u_image, uv);
+            vec4 finalColorMixed = mix(blurredColor, originalColor, focus);
 
             // 4. Aplicar Color (Tonos lavados / Sobreexposición leve)
             finalColor = finalColorMixed.rgb * vec3(1.1, 1.05, 0.9); 
@@ -621,7 +627,8 @@ function drawVideoFrame() {
     const currentTime = performance.now() / 1000.0;
     gl.uniform1f(timeLocation, currentTime);
 
-    const isMediaPipeFilter = ['whiteGlow', 'blackBg', 'whiteBg', 'echo-silhouette', 'memory-echo'].includes(selectedFilter);
+    // Los filtros eliminados se quitan de la lista de MediaPipe
+    const isMediaPipeFilter = ['whiteGlow', 'blackBg', 'whiteBg'].includes(selectedFilter);
 
     if (isMediaPipeFilter && mpResults && mpResults.segmentationMask && mpResults.image) {
         // Renderizar con MediaPipe en el canvas 2D auxiliar
@@ -629,85 +636,59 @@ function drawVideoFrame() {
         let postProcessFilterIndex = 0; // Por defecto: FILTER_NONE
 
         switch (selectedFilter) {
-            case "whiteGlow":
-                // Corrección: limpiar el canvas antes de dibujar el efecto de silueta
-                mpCanvasCtx.clearRect(0, 0, canvas.width, canvas.height); 
+            case "whiteGlow": // Silueta Roja (Corregida)
+                mpCanvasCtx.clearRect(0, 0, canvas.width, canvas.height);
 
-                // 1. Dibujar el contorno brillante (blur)
+                // 1. Dibujar el fondo de video
+                mpCanvasCtx.drawImage(mpResults.image, 0, 0, canvas.width, canvas.height);
+
+                // 2. Dibujar la silueta con glow rojo (por fuera)
                 mpCanvasCtx.save();
-                mpCanvasCtx.filter = "blur(20px)";
-                mpCanvasCtx.globalAlpha = 0.7;
+                mpCanvasCtx.globalCompositeOperation = "destination-over"; // Dibuja detrás de lo que ya existe
+                mpCanvasCtx.filter = "blur(15px)"; // Reduce el blur para mejor definición
+
+                // Usar shadowColor para crear el resplandor rojo de la máscara (que es blanca/gris)
+                mpCanvasCtx.shadowColor = "red"; 
+                mpCanvasCtx.shadowBlur = 30; // Fuerza del resplandor
+                mpCanvasCtx.globalAlpha = 1.0; // Opacidad fijada al 100%
+
+                // Dibujar la máscara. El resplandor se crea por fuera de la silueta en rojo.
                 mpCanvasCtx.drawImage(mpResults.segmentationMask, 0, 0, canvas.width, canvas.height);
+
                 mpCanvasCtx.restore();
 
-                // 2. Recortar la imagen original
+                // 3. Dibujar la silueta nítida del video encima, recortada
                 mpCanvasCtx.save();
+                mpCanvasCtx.globalCompositeOperation = "source-over";
+                mpCanvasCtx.drawImage(mpResults.image, 0, 0, canvas.width, canvas.height); 
                 mpCanvasCtx.globalCompositeOperation = "destination-in";
                 mpCanvasCtx.drawImage(mpResults.segmentationMask, 0, 0, canvas.width, canvas.height);
                 mpCanvasCtx.restore();
-
-                // 3. Dibujar el fondo
-                mpCanvasCtx.globalCompositeOperation = "destination-over";
-                mpCanvasCtx.drawImage(mpResults.image, 0, 0, canvas.width, canvas.height);
                 break;
 
             case "blackBg":
-            case "whiteBg":
-                // Corrección: limpiar el canvas antes de dibujar el fondo
+            case "whiteBg": // Silueta Negra/Blanca (Corregida)
                 mpCanvasCtx.clearRect(0, 0, canvas.width, canvas.height);
                 
-                // 1. Dibujar el fondo de color
+                // 1. Dibujar el Video frame (cubre todo)
+                mpCanvasCtx.drawImage(mpResults.image, 0, 0, canvas.width, canvas.height);
+
+                // 2. Usar la máscara para cortar el área de la figura y hacerla transparente.
+                mpCanvasCtx.globalCompositeOperation = "destination-out";
+                mpCanvasCtx.drawImage(mpResults.segmentationMask, 0, 0, canvas.width, canvas.height);
+                
+                // 3. Dibujar el color de fondo detrás de la zona transparente
+                mpCanvasCtx.globalCompositeOperation = "destination-over";
                 mpCanvasCtx.fillStyle = selectedFilter === "blackBg" ? "black" : "white";
                 mpCanvasCtx.fillRect(0, 0, canvas.width, canvas.height);
-
-                // 2. Recortar la máscara de segmentación (silueta)
+                
+                // 4. Dibujar la figura fresca encima, recortada por la máscara
                 mpCanvasCtx.save();
-                mpCanvasCtx.globalCompositeOperation = "destination-in";
+                mpCanvasCtx.globalCompositeOperation = "source-over"; // Dibuja encima
+                mpCanvasCtx.drawImage(mpResults.image, 0, 0, canvas.width, canvas.height);
+                mpCanvasCtx.globalCompositeOperation = "destination-in"; // Recorta a la figura
                 mpCanvasCtx.drawImage(mpResults.segmentationMask, 0, 0, canvas.width, canvas.height);
                 mpCanvasCtx.restore();
-
-                // 3. Dibujar la imagen original (video) en el área de la silueta
-                mpCanvasCtx.globalCompositeOperation = "source-over";
-                mpCanvasCtx.drawImage(mpResults.image, 0, 0, canvas.width, canvas.height); 
-                break;
-                
-            case "echo-silhouette":
-                // Crear un "eco" de la silueta previa
-                mpCanvasCtx.globalAlpha = 0.5; // Transparencia del eco
-                mpCanvasCtx.drawImage(canvas, 0, 0, canvas.width, canvas.height); // Dibujar el contenido anterior
-                mpCanvasCtx.globalAlpha = 1.0; // Restablecer opacidad para el dibujo actual
-
-                // Dibujar la máscara de segmentación (silueta)
-                mpCanvasCtx.save();
-                mpCanvasCtx.globalCompositeOperation = "source-over"; // Dibuja normalmente
-                mpCanvasCtx.drawImage(mpResults.segmentationMask, 0, 0, canvas.width, canvas.height);
-                
-                // Dibujar la imagen original dentro de la máscara
-                mpCanvasCtx.globalCompositeOperation = "source-in"; // Mantener solo donde ya hay contenido (la silueta)
-                mpCanvasCtx.drawImage(mpResults.image, 0, 0, canvas.width, canvas.height);
-                mpCanvasCtx.restore();
-                break;
-            
-            case "memory-echo": // MODIFICADO: Eco Visual (Lag) en la FIGURA + Recuerdo Post-Proceso
-                // 1. Aplicar un Eco General (Lag) al canvas existente. Esto hace que la figura en movimiento deje un rastro.
-                mpCanvasCtx.save();
-                mpCanvasCtx.globalCompositeOperation = "source-over";
-                
-                // **Eco/Lag fuerte en la figura** (opacidad baja en el frame anterior: 0.8)
-                // Esto genera un rastro visible en cualquier cosa que se mueva (principalmente la figura).
-                mpCanvasCtx.globalAlpha = 0.8; 
-                mpCanvasCtx.drawImage(canvas, 0, 0, canvas.width, canvas.height); 
-                
-                // 2. Dibujar el fotograma original (video) encima con opacidad completa.
-                // Esto asegura que la figura actual sea nítida y el rastro (lag) sea visible justo detrás.
-                mpCanvasCtx.globalAlpha = 1.0;
-                mpCanvasCtx.globalCompositeOperation = "source-over";
-                mpCanvasCtx.drawImage(mpResults.image, 0, 0, canvas.width, canvas.height);
-                
-                mpCanvasCtx.restore();
-                
-                // Post-Proceso WebGL para aplicar la tonalidad, distorsión y foco de "Recuerdo"
-                postProcessFilterIndex = 14; // Usar FILTER_MEMORY_RECUERDO
                 break;
         }
         mpCanvasCtx.globalCompositeOperation = "source-over"; // Resetear para futuros dibujos
