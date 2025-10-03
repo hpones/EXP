@@ -207,6 +207,7 @@ video {
   background-color: #777;
 }
 
+
 /* Estilos para la nueva ventana de previsualización */
 .preview-window {
     position: fixed; /* Usar fixed para que se posicione respecto al viewport */
