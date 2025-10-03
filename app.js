@@ -22,6 +22,7 @@ let isPaused = false;
 let selectedFilter = 'none';
 let currentCameraDeviceId = null;
 let currentFacingMode = null;
+let mediaCounter = 0; // NUEVO: Contador para enumerar las fotos y videos
 
 // --- VARIABLES Y CONFIGURACIÓN DE WEBG L ---
 let gl; // Contexto WebGL
@@ -784,13 +785,27 @@ fullscreenBtn.addEventListener('click', () => {
   }
 });
 
+// --- FUNCIÓN addToGallery MODIFICADA PARA ENUMERACIÓN ---
 function addToGallery(element, type) {
-  let container = document.createElement('div');
-  container.className = 'gallery-item';
-  container.appendChild(element);
+    // 1. Incrementar contador y crear título enumerado
+    mediaCounter++;
+    const itemType = type === 'img' ? 'Foto' : 'Video';
+    const itemTitle = `${itemType} ${mediaCounter}`;
 
-  // Event listener para abrir la ventana de previsualización al hacer clic
-  element.addEventListener('click', () => {
+    let container = document.createElement('div');
+    container.className = 'gallery-item';
+    container.dataset.title = itemTitle; // Añadir el título como data-attribute
+
+    // 2. Añadir la etiqueta visual
+    const label = document.createElement('div');
+    label.classList.add('gallery-label');
+    label.textContent = itemTitle;
+    container.appendChild(label); // Añadir la etiqueta al contenedor
+
+    container.appendChild(element);
+
+    // Event listener para abrir la ventana de previsualización al hacer clic
+    element.addEventListener('click', () => {
         console.log('Creando ventana de previsualización de', type);
         
         const previewWindow = document.createElement('div');
@@ -818,7 +833,9 @@ function addToGallery(element, type) {
         downloadBtn.onclick = () => {
             const a = document.createElement('a');
             a.href = clonedElement.src;
-            a.download = type === 'img' ? `foto_${Date.now()}.png` : `video_${Date.now()}.webm`; // Nombre único
+            // 3. Usar el título enumerado para el nombre del archivo
+            const extension = type === 'img' ? '.png' : '.webm';
+            a.download = itemTitle.replace(/\s/g, '_') + extension; 
             a.click();
             console.log('Descargando desde previsualización', type);
         };
@@ -829,7 +846,7 @@ function addToGallery(element, type) {
             if (navigator.share) {
                 try {
                     const file = await fetch(clonedElement.src).then(res => res.blob());
-                    const fileName = type === 'img' ? `foto_${Date.now()}.png` : `video_${Date.now()}.webm`;
+                    const fileName = itemTitle.replace(/\s/g, '_') + (type === 'img' ? '.png' : '.webm');
                     const fileType = type === 'img' ? 'image/png' : 'video/webm';
                     const shareData = {
                         files: [new File([file], fileName, { type: fileType })],
@@ -910,61 +927,64 @@ function addToGallery(element, type) {
         }
     });
 
-  let actions = document.createElement('div');
-  actions.className = 'gallery-actions';
+    // 4. Actualizar botones de acción de la galería
+    let actions = document.createElement('div');
+    actions.className = 'gallery-actions';
 
-  let downloadBtn = document.createElement('button');
-  downloadBtn.textContent = 'Descargar';
-  downloadBtn.onclick = () => {
-    const a = document.createElement('a');
-    a.href = element.src;
-    a.download = type === 'img' ? `foto_${Date.now()}.png` : `video_${Date.now()}.webm`;
-    a.click();
-    console.log('Descargando', type);
-  };
+    let downloadBtn = document.createElement('button');
+    downloadBtn.textContent = 'Descargar';
+    downloadBtn.onclick = () => {
+        const a = document.createElement('a');
+        a.href = element.src;
+        // Usar el título enumerado para el nombre del archivo
+        const extension = type === 'img' ? '.png' : '.webm';
+        a.download = itemTitle.replace(/\s/g, '_') + extension;
+        a.click();
+        console.log('Descargando', type);
+    };
 
-  let shareBtn = document.createElement('button');
-  shareBtn.textContent = 'Compartir';
-  shareBtn.onclick = async () => {
+    let shareBtn = document.createElement('button');
+    shareBtn.textContent = 'Compartir';
+    shareBtn.onclick = async () => {
+        if (navigator.share) {
+        try {
+            const file = await fetch(element.src).then(res => res.blob());
+            const fileName = itemTitle.replace(/\s/g, '_') + (type === 'img' ? '.png' : '.webm');
+            const fileType = type === 'img' ? 'image/png' : 'video/webm';
+            const shareData = {
+            files: [new File([file], fileName, { type: fileType })],
+            title: 'Mi creación desde Experimental Camera',
+            text: '¡Echa un vistazo a lo que hice con Experimental Camera!'
+            };
+            await navigator.share(shareData);
+            console.log('Contenido compartido exitosamente');
+        } catch (error) {
+            console.error('Error al compartir:', error);
+        }
+        } else {
+        alert('La API Web Share no es compatible con este navegador.');
+        console.warn('La API Web Share no es compatible.');
+        }
+    };
+
+    let deleteBtn = document.createElement('button');
+    deleteBtn.textContent = 'Eliminar';
+    deleteBtn.onclick = () => {
+        if (type === 'video' && element.src.startsWith('blob:')) {
+        URL.revokeObjectURL(element.src);
+        }
+        container.remove();
+        console.log('Elemento de galería eliminado.');
+    };
+
+    actions.appendChild(downloadBtn);
     if (navigator.share) {
-      try {
-        const file = await fetch(element.src).then(res => res.blob());
-        const fileName = type === 'img' ? `foto_${Date.now()}.png` : `video_${Date.now()}.webm`;
-        const fileType = type === 'img' ? 'image/png' : 'video/webm';
-        const shareData = {
-          files: [new File([file], fileName, { type: fileType })],
-          title: 'Mi creación desde Experimental Camera',
-          text: '¡Echa un vistazo a lo que hice con Experimental Camera!'
-        };
-        await navigator.share(shareData);
-        console.log('Contenido compartido exitosamente');
-      } catch (error) {
-        console.error('Error al compartir:', error);
-      }
-    } else {
-      alert('La API Web Share no es compatible con este navegador.');
-      console.warn('La API Web Share no es compatible.');
+        actions.appendChild(shareBtn);
     }
-  };
+    actions.appendChild(deleteBtn);
+    container.appendChild(actions);
 
-  let deleteBtn = document.createElement('button');
-  deleteBtn.textContent = 'Eliminar';
-  deleteBtn.onclick = () => {
-    if (type === 'video' && element.src.startsWith('blob:')) {
-      URL.revokeObjectURL(element.src);
-    }
-    container.remove();
-    console.log('Elemento de galería eliminado.');
-  };
-
-  actions.appendChild(downloadBtn);
-  if (navigator.share) {
-    actions.appendChild(shareBtn);
-  }
-  actions.appendChild(deleteBtn);
-  container.appendChild(actions);
-
-  gallery.prepend(container);
+    gallery.prepend(container);
 }
 
 
@@ -1037,6 +1057,14 @@ glcanvas.addEventListener('touchend', () => {
     // Reiniciar valores de touch
     touchStartX = 0;
     touchEndX = 0;
+});
+
+// --- CORRECCIÓN DE GESTO: EVITAR CAMBIO DE FILTRO POR TAP/CLICK ---
+// Este listener detiene el evento 'click' en el canvas WebGL para asegurar que solo
+// la lógica de 'swipe' (detectada en touchend/touchmove) cambie los filtros.
+glcanvas.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
 });
 
 listCameras();
