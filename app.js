@@ -75,8 +75,10 @@ const vsSource = `
 
     void main() {
         gl_Position = a_position;
-        // Si u_flipX es -1.0, espeja horizontalmente (cámara trasera)
-        v_texCoord = vec2(u_flipX < 0.0 ? 1.0 - a_texCoord.x : a_texCoord.x, a_texCoord.y);
+        // u_flipX: 1.0 = sin espejo (frontal), -1.0 = con espejo (trasera)
+        // Si flipX==1 -> coordX = x, si flipX==-1 -> coordX = 1-x
+        float coordX = 0.5 + (a_texCoord.x - 0.5) * u_flipX;
+        v_texCoord = vec2(coordX, a_texCoord.y);
     }
 `;
 
@@ -398,6 +400,7 @@ const fsSource = `
             colorized = mix(colorized, vec3(1.0), flash * 0.5);
 
             finalColor = clamp(colorized, 0.0, 1.0);
+        }
 
         gl_FragColor = vec4(finalColor, alpha);
     }
