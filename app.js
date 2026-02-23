@@ -628,7 +628,7 @@ function drawVideoFrame() {
     gl.uniform1f(timeLocation, currentTime);
 
     // Los filtros eliminados se quitan de la lista de MediaPipe
-    const isMediaPipeFilter = ['whiteGlow', 'blackBg', 'whiteBg'].includes(selectedFilter);
+    const isMediaPipeFilter = ['whiteGlow', 'blackBg', 'whiteBg', 'invisible'].includes(selectedFilter);
 
     if (isMediaPipeFilter && mpResults && mpResults.segmentationMask && mpResults.image) {
         // Renderizar con MediaPipe en el canvas 2D auxiliar
@@ -636,56 +636,82 @@ function drawVideoFrame() {
         let postProcessFilterIndex = 0; // Por defecto: FILTER_NONE
 
         switch (selectedFilter) {
-            case "whiteGlow": // Silueta Roja (Corregida)
+            case "whiteGlow": // Silueta Roja: fondo real + silueta rellena de rojo
                 mpCanvasCtx.clearRect(0, 0, canvas.width, canvas.height);
 
-                // 1. Dibujar el fondo de video
+                // 1. Dibujar el fondo del video (imagen completa)
                 mpCanvasCtx.drawImage(mpResults.image, 0, 0, canvas.width, canvas.height);
 
-                // 2. Dibujar la silueta con glow rojo (por fuera)
-                mpCanvasCtx.save();
-                mpCanvasCtx.globalCompositeOperation = "destination-over"; // Dibuja detrás de lo que ya existe
-                mpCanvasCtx.filter = "blur(15px)"; // Reduce el blur para mejor definición
-
-                // Usar shadowColor para crear el resplandor rojo de la máscara (que es blanca/gris)
-                mpCanvasCtx.shadowColor = "red"; 
-                mpCanvasCtx.shadowBlur = 30; // Fuerza del resplandor
-                mpCanvasCtx.globalAlpha = 1.0; // Opacidad fijada al 100%
-
-                // Dibujar la máscara. El resplandor se crea por fuera de la silueta en rojo.
-                mpCanvasCtx.drawImage(mpResults.segmentationMask, 0, 0, canvas.width, canvas.height);
-
-                mpCanvasCtx.restore();
-
-                // 3. Dibujar la silueta nítida del video encima, recortada
+                // 2. Pintar la silueta de la persona en rojo sólido usando la máscara como clip
                 mpCanvasCtx.save();
                 mpCanvasCtx.globalCompositeOperation = "source-over";
-                mpCanvasCtx.drawImage(mpResults.image, 0, 0, canvas.width, canvas.height); 
-                mpCanvasCtx.globalCompositeOperation = "destination-in";
-                mpCanvasCtx.drawImage(mpResults.segmentationMask, 0, 0, canvas.width, canvas.height);
+                // Crear una capa temporal para recortar el relleno a la silueta
+                const tempCanvas = document.createElement('canvas');
+                tempCanvas.width = canvas.width;
+                tempCanvas.height = canvas.height;
+                const tempCtx = tempCanvas.getContext('2d');
+                // Rellenar de rojo
+                tempCtx.fillStyle = "red";
+                tempCtx.fillRect(0, 0, tempCanvas.width, tempCanvas.height);
+                // Recortar al área de la persona
+                tempCtx.globalCompositeOperation = "destination-in";
+                tempCtx.drawImage(mpResults.segmentationMask, 0, 0, tempCanvas.width, tempCanvas.height);
+                // Dibujar el resultado sobre el fondo
+                mpCanvasCtx.drawImage(tempCanvas, 0, 0);
                 mpCanvasCtx.restore();
                 break;
 
-            case "blackBg":
-            case "whiteBg": // Silueta Negra/Blanca
+            case "blackBg": // Silueta Negra: fondo real + silueta rellena de negro
+            case "whiteBg": // Silueta Blanca: fondo real + silueta rellena de blanco
                 mpCanvasCtx.clearRect(0, 0, canvas.width, canvas.height);
 
-                // 1. Dibujar fondo de color sólido
-                mpCanvasCtx.fillStyle = selectedFilter === "blackBg" ? "black" : "white";
-                mpCanvasCtx.fillRect(0, 0, canvas.width, canvas.height);
+                // 1. Dibujar el fondo del video (imagen completa)
+                mpCanvasCtx.drawImage(mpResults.image, 0, 0, canvas.width, canvas.height);
 
-                // 2. Dibujar la figura del video recortada por la máscara encima del fondo
+                // 2. Pintar la silueta con el color sólido usando la máscara como clip
                 mpCanvasCtx.save();
                 mpCanvasCtx.globalCompositeOperation = "source-over";
-                mpCanvasCtx.drawImage(mpResults.image, 0, 0, canvas.width, canvas.height);
-                mpCanvasCtx.globalCompositeOperation = "destination-in";
-                mpCanvasCtx.drawImage(mpResults.segmentationMask, 0, 0, canvas.width, canvas.height);
+                const tempCanvasBW = document.createElement('canvas');
+                tempCanvasBW.width = canvas.width;
+                tempCanvasBW.height = canvas.height;
+                const tempCtxBW = tempCanvasBW.getContext('2d');
+                // Rellenar del color elegido
+                tempCtxBW.fillStyle = selectedFilter === "blackBg" ? "black" : "white";
+                tempCtxBW.fillRect(0, 0, tempCanvasBW.width, tempCanvasBW.height);
+                // Recortar al área de la persona
+                tempCtxBW.globalCompositeOperation = "destination-in";
+                tempCtxBW.drawImage(mpResults.segmentationMask, 0, 0, tempCanvasBW.width, tempCanvasBW.height);
+                // Dibujar el resultado sobre el fondo
+                mpCanvasCtx.drawImage(tempCanvasBW, 0, 0);
                 mpCanvasCtx.restore();
+                break;
 
-                // 3. Volver a poner el fondo detrás de la figura recortada
-                mpCanvasCtx.globalCompositeOperation = "destination-over";
-                mpCanvasCtx.fillStyle = selectedFilter === "blackBg" ? "black" : "white";
-                mpCanvasCtx.fillRect(0, 0, canvas.width, canvas.height);
+            case "invisible": // Invisible: reemplaza la silueta con el fondo capturado
+                mpCanvasCtx.clearRect(0, 0, canvas.width, canvas.height);
+
+                // Capturar/actualizar el fondo de referencia cuando no hay persona (o siempre en zonas sin persona)
+                // Estrategia: dibujar fondo dilatado/desenfocado para tapar la silueta con el entorno
+                // Usamos la imagen del video pero eliminamos la persona y rellenamos con el entorno cercano
+
+                // 1. Dibujar la imagen completa del video
+                mpCanvasCtx.drawImage(mpResults.image, 0, 0, canvas.width, canvas.height);
+
+                // 2. Crear una versión difuminada del video para usarla como "fondo reconstruido"
+                const bgCanvas = document.createElement('canvas');
+                bgCanvas.width = canvas.width;
+                bgCanvas.height = canvas.height;
+                const bgCtx = bgCanvas.getContext('2d');
+                bgCtx.filter = "blur(18px)";
+                bgCtx.drawImage(mpResults.image, -30, -30, canvas.width + 60, canvas.height + 60);
+                bgCtx.filter = "none";
+
+                // 3. Recortar ese fondo difuminado a la silueta de la persona
+                bgCtx.globalCompositeOperation = "destination-in";
+                bgCtx.drawImage(mpResults.segmentationMask, 0, 0, bgCanvas.width, bgCanvas.height);
+
+                // 4. Superponer el fondo difuminado recortado sobre la imagen (camufla a la persona)
+                mpCanvasCtx.globalCompositeOperation = "source-over";
+                mpCanvasCtx.drawImage(bgCanvas, 0, 0);
                 break;
         }
         mpCanvasCtx.globalCompositeOperation = "source-over"; // Resetear para futuros dibujos
