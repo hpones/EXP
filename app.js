@@ -33,6 +33,7 @@ let videoTexture; // Textura donde se cargará el fotograma del video (para filt
 let mpOutputTexture; // Nueva textura para el output de MediaPipe (para filtros avanzados)
 let filterTypeLocation; // Ubicación del uniform para el tipo de filtro
 let timeLocation; // Ubicación del uniform para el tiempo (para efectos dinámicos)
+let flipXLocation; // Ubicación del uniform para el espejo horizontal
 
 // --- VARIABLES Y CONFIGURACIÓN DE AUDIO ---
 let audioContext;
@@ -68,12 +69,14 @@ let mpProcessing = false; // Bandera para controlar si MediaPipe está procesand
 const vsSource = `
     attribute vec4 a_position;
     attribute vec2 a_texCoord;
+    uniform float u_flipX;
 
     varying vec2 v_texCoord;
 
     void main() {
         gl_Position = a_position;
-        v_texCoord = a_texCoord;
+        // Si u_flipX es -1.0, espeja horizontalmente (cámara trasera)
+        v_texCoord = vec2(u_flipX < 0.0 ? 1.0 - a_texCoord.x : a_texCoord.x, a_texCoord.y);
     }
 `;
 
@@ -325,45 +328,76 @@ const fsSource = `
         } else if (u_filterType == FILTER_GLITCH2) {
             vec2 uv = texCoord;
 
-            // Líneas de glitch horizontales: bloques de filas desplazados
+            // --- Movimientos bruscos globales (frame jumps) ---
+            // Cada ~0.08s hay un "golpe" aleatorio que desplaza toda la imagen
+            float jumpTime = floor(u_time * 12.0);
+            float jumpRnd = random(vec2(jumpTime * 0.017, jumpTime * 0.031));
+            float jumpRnd2 = random(vec2(jumpTime * 0.053, jumpTime * 0.072));
+            // Solo ocurre en ~25% de los frames
+            float jumpX = 0.0;
+            float jumpY = 0.0;
+            if (jumpRnd > 0.75) {
+                jumpX = (jumpRnd - 0.75) * 0.18 * sign(jumpRnd2 - 0.5);
+                jumpY = (jumpRnd2 - 0.5) * 0.06;
+            }
+            uv.x = fract(uv.x + jumpX);
+            uv.y = fract(uv.y + jumpY);
+
+            // --- Distorsión de rostro: zona superior-central (aprox donde está la cara) ---
+            // Aplica wobble intenso a la franja vertical 0.1–0.5 del canvas
+            float faceZone = smoothstep(0.08, 0.14, uv.y) * (1.0 - smoothstep(0.50, 0.56, uv.y));
+            float faceZoneX = smoothstep(0.20, 0.30, uv.x) * (1.0 - smoothstep(0.70, 0.80, uv.x));
+            float faceMask = faceZone * faceZoneX;
+            float faceWobbleX = sin(uv.y * 60.0 + u_time * 18.0) * 0.025 * faceMask;
+            float faceWobbleY = cos(uv.x * 45.0 + u_time * 14.0) * 0.018 * faceMask;
+            // Glitch de bloques en el rostro
+            float faceBlockY = floor(uv.y * 80.0) / 80.0;
+            float faceGlitch = random(vec2(faceBlockY * 3.1, floor(u_time * 20.0) * 0.7));
+            float faceShift = 0.0;
+            if (faceGlitch > 0.70 && faceMask > 0.3) {
+                faceShift = (faceGlitch - 0.70) * 0.35;
+            }
+            uv.x = fract(uv.x + faceWobbleX + faceShift);
+            uv.y = fract(uv.y + faceWobbleY);
+
+            // --- Líneas de glitch horizontales: bloques de filas desplazados ---
             float blockY = floor(uv.y * 40.0) / 40.0;
             float glitchSeed = random(vec2(blockY, floor(u_time * 12.0)));
             float glitchSeed2 = random(vec2(blockY + 0.3, floor(u_time * 8.0)));
-
-            // Solo algunos bloques se distorsionan intensamente
             float shift = 0.0;
             if (glitchSeed > 0.65) {
-                shift = (glitchSeed - 0.65) * 1.2; // desplazamiento horizontal fuerte
+                shift = (glitchSeed - 0.65) * 1.2;
             }
             uv.x = fract(uv.x + shift);
 
-            // Separación cromática intensa (aberración)
-            float aberration = 0.018 + glitchSeed2 * 0.025;
+            // --- Aberración cromática intensa ---
+            float aberration = 0.018 + glitchSeed2 * 0.025 + abs(jumpX) * 0.3;
             float r = texture2D(u_image, vec2(uv.x + aberration, uv.y)).r;
             float g = texture2D(u_image, uv).g;
             float b = texture2D(u_image, vec2(uv.x - aberration, uv.y)).b;
             vec3 aberrated = vec3(r, g, b);
 
-            // Paleta: empujar hacia rosas y verdes vivos
-            // Rosa: boost R, boost B, bajar G. Verde: boost G, bajar R y B
+            // --- Paleta rosas y verdes vivos ---
             float lum = (aberrated.r * 0.299 + aberrated.g * 0.587 + aberrated.b * 0.114);
             vec3 pink  = vec3(1.0, 0.05, 0.75);
             vec3 green = vec3(0.0, 1.0, 0.2);
-            // Alterna entre rosa y verde según posición y tiempo
             float wave = sin(uv.y * 18.0 + u_time * 5.0) * 0.5 + 0.5;
             vec3 palette = mix(pink, green, wave);
-            // Mezclar: zonas brillantes toman el color de paleta, zonas oscuras se quedan oscuras
             vec3 colorized = mix(aberrated * 0.3, palette, smoothstep(0.2, 0.8, lum));
 
-            // Ruido digital en bloques (scanlines finas)
+            // --- Scanlines con píxeles corruptos ---
             float scanline = mod(floor(uv.y * u_resolution.y), 3.0);
             float noise = random(vec2(uv.x * 100.0, floor(u_time * 20.0) + uv.y * 50.0));
             if (scanline == 0.0 && noise > 0.6) {
-                colorized = mix(colorized, palette.brg, 0.8); // píxeles corruptos
+                colorized = mix(colorized, palette.brg, 0.8);
             }
 
+            // --- Flash blanco breve en momentos de golpe ---
+            float flash = 0.0;
+            if (jumpRnd > 0.88) flash = (jumpRnd - 0.88) * 4.0;
+            colorized = mix(colorized, vec3(1.0), flash * 0.5);
+
             finalColor = clamp(colorized, 0.0, 1.0);
-        }
 
         gl_FragColor = vec4(finalColor, alpha);
     }
@@ -398,28 +432,27 @@ function createProgram(gl, vertexShader, fragmentShader) {
     return program;
 }
 
-// CORRECCIÓN DE CÁMARA INVERTIDA: Invertir el orden de los vértices X para corregir el efecto espejo
+// CORRECCIÓN DE CÁMARA: el espejo se controla via uniform u_flipX según facingMode
 function setupQuadBuffers(gl) {
     const positions = new Float32Array([
-        1, -1, 
         -1, -1,
-        1,  1,
-        1,  1,
-        -1, -1,
-        -1,  1, 
+         1, -1,
+        -1,  1,
+        -1,  1,
+         1, -1,
+         1,  1,
     ]);
     positionBuffer = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
     gl.bufferData(gl.ARRAY_BUFFER, positions, gl.STATIC_DRAW);
 
-    // Las coordenadas de textura deben seguir el nuevo orden de los vértices
     const texCoords = new Float32Array([
-        1, 1, 
-        0, 1, 
-        1, 0, 
-        1, 0,
         0, 1,
-        0, 0, 
+        1, 1,
+        0, 0,
+        0, 0,
+        1, 1,
+        1, 0,
     ]);
     texCoordBuffer = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, texCoordBuffer);
@@ -468,6 +501,7 @@ function initWebGL() {
     timeLocation = gl.getUniformLocation(program, 'u_time');
     colorShiftUniformLocation = gl.getUniformLocation(program, 'u_colorShift');
     program.aspectRatioLocation = gl.getUniformLocation(program, 'u_aspectRatio');
+    flipXLocation = gl.getUniformLocation(program, 'u_flipX');
 
     bassAmpUniformLocation = gl.getUniformLocation(program, 'u_bassAmp');
     midAmpUniformLocation = gl.getUniformLocation(program, 'u_midAmp');
@@ -665,16 +699,27 @@ function drawVideoFrame() {
     gl.useProgram(program);
 
     gl.uniform2f(program.resolutionLocation, glcanvas.width, glcanvas.height);
-    gl.uniform1f(program.aspectRatioLocation, glcanvas.width / glcanvas.height); // Pasar el aspect ratio
+    gl.uniform1f(program.aspectRatioLocation, glcanvas.width / glcanvas.height);
     const currentTime = performance.now() / 1000.0;
     gl.uniform1f(timeLocation, currentTime);
+
+    // Cámara frontal: mostrar sin espejo (natural). Trasera: espejo horizontal.
+    const isFront = (currentFacingMode === 'user' || currentFacingMode === 'unknown');
+    gl.uniform1f(flipXLocation, isFront ? 1.0 : -1.0);
 
     // Los filtros eliminados se quitan de la lista de MediaPipe
     const isMediaPipeFilter = ['whiteGlow', 'blackBg', 'whiteBg', 'invisible', 'static-silhouette', 'echo-visual'].includes(selectedFilter);
 
     if (isMediaPipeFilter && mpResults && mpResults.segmentationMask && mpResults.image) {
         // Renderizar con MediaPipe en el canvas 2D auxiliar
-        
+
+        // Espejo horizontal para cámara frontal en el canvas 2D
+        mpCanvasCtx.save();
+        if (isFront) {
+            mpCanvasCtx.translate(canvas.width, 0);
+            mpCanvasCtx.scale(-1, 1);
+        }
+
         let postProcessFilterIndex = 0; // Por defecto: FILTER_NONE
 
         switch (selectedFilter) {
@@ -778,28 +823,27 @@ function drawVideoFrame() {
                 // 1. Dibujar el fondo del video
                 mpCanvasCtx.drawImage(mpResults.image, 0, 0, canvas.width, canvas.height);
 
-                // 2. Crear silueta recortada de la persona (en blanco/negro) en canvas temporal
+                // 2. Silueta base negra sólida recortada por la máscara
                 const ecoBase = document.createElement('canvas');
                 ecoBase.width = canvas.width;
                 ecoBase.height = canvas.height;
                 const ecoCtx = ecoBase.getContext('2d');
-
-                // Silueta oscura semitransparente
-                ecoCtx.fillStyle = "rgba(0, 0, 0, 1)";
+                ecoCtx.fillStyle = "rgb(10, 10, 10)";
                 ecoCtx.fillRect(0, 0, ecoBase.width, ecoBase.height);
                 ecoCtx.globalCompositeOperation = "destination-in";
                 ecoCtx.drawImage(mpResults.segmentationMask, 0, 0, ecoBase.width, ecoBase.height);
 
-                // 3. Dibujar 4 ecos desplazados hacia atrás (con opacidad decreciente)
-                const echoCount = 4;
-                const stepX = 18; // desplazamiento horizontal por eco
-                const stepY = 8;  // leve desplazamiento vertical
+                // 3. Dibujar 7 ecos desplazados — el más lejano opacidad 0.30, el más cercano 0.80
+                const echoCount = 7;
+                const stepX = 22;
+                const stepY = 6;
                 for (let i = echoCount; i >= 1; i--) {
-                    mpCanvasCtx.globalAlpha = 0.18 * (echoCount - i + 1) / echoCount;
+                    const alpha = 0.30 + (0.50 * (echoCount - i) / (echoCount - 1));
+                    mpCanvasCtx.globalAlpha = alpha;
                     mpCanvasCtx.drawImage(ecoBase, stepX * i, stepY * i);
                 }
 
-                // 4. Dibujar la silueta original del video (recortada) encima, nítida
+                // 4. Figura real de la persona recortada encima, nítida
                 mpCanvasCtx.globalAlpha = 1.0;
                 const personCanvas = document.createElement('canvas');
                 personCanvas.width = canvas.width;
@@ -813,6 +857,7 @@ function drawVideoFrame() {
             }
         }
         mpCanvasCtx.globalCompositeOperation = "source-over"; // Resetear para futuros dibujos
+        mpCanvasCtx.restore(); // Cierra el save del espejo
 
         // Actualizar la textura WebGL con el contenido del canvas 2D de MediaPipe
         gl.activeTexture(gl.TEXTURE0);
