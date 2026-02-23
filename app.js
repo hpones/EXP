@@ -667,28 +667,25 @@ function drawVideoFrame() {
                 break;
 
             case "blackBg":
-            case "whiteBg": // Silueta Negra/Blanca (Corregida)
+            case "whiteBg": // Silueta Negra/Blanca
                 mpCanvasCtx.clearRect(0, 0, canvas.width, canvas.height);
-                
-                // 1. Dibujar el Video frame (cubre todo)
-                mpCanvasCtx.drawImage(mpResults.image, 0, 0, canvas.width, canvas.height);
 
-                // 2. Usar la máscara para cortar el área de la figura y hacerla transparente.
-                mpCanvasCtx.globalCompositeOperation = "destination-out";
+                // 1. Dibujar fondo de color sólido
+                mpCanvasCtx.fillStyle = selectedFilter === "blackBg" ? "black" : "white";
+                mpCanvasCtx.fillRect(0, 0, canvas.width, canvas.height);
+
+                // 2. Dibujar la figura del video recortada por la máscara encima del fondo
+                mpCanvasCtx.save();
+                mpCanvasCtx.globalCompositeOperation = "source-over";
+                mpCanvasCtx.drawImage(mpResults.image, 0, 0, canvas.width, canvas.height);
+                mpCanvasCtx.globalCompositeOperation = "destination-in";
                 mpCanvasCtx.drawImage(mpResults.segmentationMask, 0, 0, canvas.width, canvas.height);
-                
-                // 3. Dibujar el color de fondo detrás de la zona transparente
+                mpCanvasCtx.restore();
+
+                // 3. Volver a poner el fondo detrás de la figura recortada
                 mpCanvasCtx.globalCompositeOperation = "destination-over";
                 mpCanvasCtx.fillStyle = selectedFilter === "blackBg" ? "black" : "white";
                 mpCanvasCtx.fillRect(0, 0, canvas.width, canvas.height);
-                
-                // 4. Dibujar la figura fresca encima, recortada por la máscara
-                mpCanvasCtx.save();
-                mpCanvasCtx.globalCompositeOperation = "source-over"; // Dibuja encima
-                mpCanvasCtx.drawImage(mpResults.image, 0, 0, canvas.width, canvas.height);
-                mpCanvasCtx.globalCompositeOperation = "destination-in"; // Recorta a la figura
-                mpCanvasCtx.drawImage(mpResults.segmentationMask, 0, 0, canvas.width, canvas.height);
-                mpCanvasCtx.restore();
                 break;
         }
         mpCanvasCtx.globalCompositeOperation = "source-over"; // Resetear para futuros dibujos
@@ -794,11 +791,7 @@ recordBtn.addEventListener('click', () => {
       let vid = document.createElement('video');
       vid.src = url;
       vid.controls = true;
-      vid.onloadedmetadata = () => {
-        vid.play();
-        console.log('Video grabado cargado y reproduciendo.');
-      };
-      addToGallery(vid, 'video'); // Ahora sí se añade el video a la galería
+      addToGallery(vid, 'video');
     };
     mediaRecorder.start();
     isRecording = true;
@@ -1130,3 +1123,21 @@ glcanvas.addEventListener('click', (e) => {
 });
 
 listCameras();
+
+// --- TUTORIAL DE INICIACIÓN ---
+(function initTutorial() {
+    const overlay = document.getElementById('tutorial-overlay');
+    const skipBtn = document.getElementById('tutorial-skip');
+    if (!overlay || !skipBtn) return;
+
+    const TUTORIAL_KEY = 'exp_cam_tutorial_seen';
+    if (localStorage.getItem(TUTORIAL_KEY)) {
+        overlay.style.display = 'none';
+        return;
+    }
+
+    skipBtn.addEventListener('click', () => {
+        overlay.style.display = 'none';
+        try { localStorage.setItem(TUTORIAL_KEY, '1'); } catch(e) {}
+    });
+})();

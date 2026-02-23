@@ -45,6 +45,79 @@ video {
   z-index: 3; /* Asegura que los controles estén encima del canvas */
 }
 
+.btn-wrapper {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.btn-label {
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 0.72em;
+  text-shadow: 0 1px 3px rgba(0,0,0,0.8);
+  pointer-events: none;
+  letter-spacing: 0.03em;
+}
+
+/* Tutorial overlay */
+#tutorial-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(0,0,0,0.82);
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+#tutorial-content {
+  background: #1a1a1a;
+  border: 1px solid #444;
+  border-radius: 12px;
+  padding: 24px 28px;
+  max-width: 340px;
+  width: 90%;
+  color: white;
+  font-size: 0.92em;
+}
+
+#tutorial-content h2 {
+  margin: 0 0 16px;
+  font-size: 1.1em;
+  text-align: center;
+  color: #f0f0f0;
+}
+
+#tutorial-content ul {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+#tutorial-content li {
+  line-height: 1.4;
+}
+
+#tutorial-skip {
+  display: block;
+  width: 100%;
+  padding: 10px;
+  background: #444;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-size: 1em;
+  cursor: pointer;
+}
+
+#tutorial-skip:hover {
+  background: #666;
+}
+
 .circle {
   width: 60px;
   height: 60px;
