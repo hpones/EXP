@@ -109,6 +109,7 @@ const fsSource = `
     const int FILTER_MIRROR = 11;
     const int FILTER_FISHEYE = 12;
     const int FILTER_RECUERDO = 13; // Filtro "Recuerdo" (WebGL puro y post-proceso)
+    const int FILTER_GLITCH2 = 14;  // Glitch 2: interferencia intensa rosas y verdes
 
     // Función para generar ruido básico
     float random(vec2 st) {
@@ -321,6 +322,47 @@ const fsSource = `
             finalColor += grain;
             
             finalColor = clamp(finalColor, 0.0, 1.0); 
+        } else if (u_filterType == FILTER_GLITCH2) {
+            vec2 uv = texCoord;
+
+            // Líneas de glitch horizontales: bloques de filas desplazados
+            float blockY = floor(uv.y * 40.0) / 40.0;
+            float glitchSeed = random(vec2(blockY, floor(u_time * 12.0)));
+            float glitchSeed2 = random(vec2(blockY + 0.3, floor(u_time * 8.0)));
+
+            // Solo algunos bloques se distorsionan intensamente
+            float shift = 0.0;
+            if (glitchSeed > 0.65) {
+                shift = (glitchSeed - 0.65) * 1.2; // desplazamiento horizontal fuerte
+            }
+            uv.x = fract(uv.x + shift);
+
+            // Separación cromática intensa (aberración)
+            float aberration = 0.018 + glitchSeed2 * 0.025;
+            float r = texture2D(u_image, vec2(uv.x + aberration, uv.y)).r;
+            float g = texture2D(u_image, uv).g;
+            float b = texture2D(u_image, vec2(uv.x - aberration, uv.y)).b;
+            vec3 aberrated = vec3(r, g, b);
+
+            // Paleta: empujar hacia rosas y verdes vivos
+            // Rosa: boost R, boost B, bajar G. Verde: boost G, bajar R y B
+            float lum = (aberrated.r * 0.299 + aberrated.g * 0.587 + aberrated.b * 0.114);
+            vec3 pink  = vec3(1.0, 0.05, 0.75);
+            vec3 green = vec3(0.0, 1.0, 0.2);
+            // Alterna entre rosa y verde según posición y tiempo
+            float wave = sin(uv.y * 18.0 + u_time * 5.0) * 0.5 + 0.5;
+            vec3 palette = mix(pink, green, wave);
+            // Mezclar: zonas brillantes toman el color de paleta, zonas oscuras se quedan oscuras
+            vec3 colorized = mix(aberrated * 0.3, palette, smoothstep(0.2, 0.8, lum));
+
+            // Ruido digital en bloques (scanlines finas)
+            float scanline = mod(floor(uv.y * u_resolution.y), 3.0);
+            float noise = random(vec2(uv.x * 100.0, floor(u_time * 20.0) + uv.y * 50.0));
+            if (scanline == 0.0 && noise > 0.6) {
+                colorized = mix(colorized, palette.brg, 0.8); // píxeles corruptos
+            }
+
+            finalColor = clamp(colorized, 0.0, 1.0);
         }
 
         gl_FragColor = vec4(finalColor, alpha);
@@ -628,7 +670,7 @@ function drawVideoFrame() {
     gl.uniform1f(timeLocation, currentTime);
 
     // Los filtros eliminados se quitan de la lista de MediaPipe
-    const isMediaPipeFilter = ['whiteGlow', 'blackBg', 'whiteBg', 'invisible'].includes(selectedFilter);
+    const isMediaPipeFilter = ['whiteGlow', 'blackBg', 'whiteBg', 'invisible', 'static-silhouette', 'echo-visual'].includes(selectedFilter);
 
     if (isMediaPipeFilter && mpResults && mpResults.segmentationMask && mpResults.image) {
         // Renderizar con MediaPipe en el canvas 2D auxiliar
@@ -636,62 +678,47 @@ function drawVideoFrame() {
         let postProcessFilterIndex = 0; // Por defecto: FILTER_NONE
 
         switch (selectedFilter) {
-            case "whiteGlow": // Silueta Roja: fondo real + silueta rellena de rojo
+            case "whiteGlow": { // Silueta Roja: fondo real + silueta rellena de rojo
                 mpCanvasCtx.clearRect(0, 0, canvas.width, canvas.height);
 
                 // 1. Dibujar el fondo del video (imagen completa)
                 mpCanvasCtx.drawImage(mpResults.image, 0, 0, canvas.width, canvas.height);
 
                 // 2. Pintar la silueta de la persona en rojo sólido usando la máscara como clip
-                mpCanvasCtx.save();
-                mpCanvasCtx.globalCompositeOperation = "source-over";
-                // Crear una capa temporal para recortar el relleno a la silueta
                 const tempCanvas = document.createElement('canvas');
                 tempCanvas.width = canvas.width;
                 tempCanvas.height = canvas.height;
                 const tempCtx = tempCanvas.getContext('2d');
-                // Rellenar de rojo
                 tempCtx.fillStyle = "red";
                 tempCtx.fillRect(0, 0, tempCanvas.width, tempCanvas.height);
-                // Recortar al área de la persona
                 tempCtx.globalCompositeOperation = "destination-in";
                 tempCtx.drawImage(mpResults.segmentationMask, 0, 0, tempCanvas.width, tempCanvas.height);
-                // Dibujar el resultado sobre el fondo
                 mpCanvasCtx.drawImage(tempCanvas, 0, 0);
-                mpCanvasCtx.restore();
                 break;
+            }
 
             case "blackBg": // Silueta Negra: fondo real + silueta rellena de negro
-            case "whiteBg": // Silueta Blanca: fondo real + silueta rellena de blanco
+            case "whiteBg": { // Silueta Blanca: fondo real + silueta rellena de blanco
                 mpCanvasCtx.clearRect(0, 0, canvas.width, canvas.height);
 
                 // 1. Dibujar el fondo del video (imagen completa)
                 mpCanvasCtx.drawImage(mpResults.image, 0, 0, canvas.width, canvas.height);
 
                 // 2. Pintar la silueta con el color sólido usando la máscara como clip
-                mpCanvasCtx.save();
-                mpCanvasCtx.globalCompositeOperation = "source-over";
                 const tempCanvasBW = document.createElement('canvas');
                 tempCanvasBW.width = canvas.width;
                 tempCanvasBW.height = canvas.height;
                 const tempCtxBW = tempCanvasBW.getContext('2d');
-                // Rellenar del color elegido
                 tempCtxBW.fillStyle = selectedFilter === "blackBg" ? "black" : "white";
                 tempCtxBW.fillRect(0, 0, tempCanvasBW.width, tempCanvasBW.height);
-                // Recortar al área de la persona
                 tempCtxBW.globalCompositeOperation = "destination-in";
                 tempCtxBW.drawImage(mpResults.segmentationMask, 0, 0, tempCanvasBW.width, tempCanvasBW.height);
-                // Dibujar el resultado sobre el fondo
                 mpCanvasCtx.drawImage(tempCanvasBW, 0, 0);
-                mpCanvasCtx.restore();
                 break;
+            }
 
-            case "invisible": // Invisible: reemplaza la silueta con el fondo capturado
+            case "invisible": { // Invisible: camufla la silueta con el entorno difuminado
                 mpCanvasCtx.clearRect(0, 0, canvas.width, canvas.height);
-
-                // Capturar/actualizar el fondo de referencia cuando no hay persona (o siempre en zonas sin persona)
-                // Estrategia: dibujar fondo dilatado/desenfocado para tapar la silueta con el entorno
-                // Usamos la imagen del video pero eliminamos la persona y rellenamos con el entorno cercano
 
                 // 1. Dibujar la imagen completa del video
                 mpCanvasCtx.drawImage(mpResults.image, 0, 0, canvas.width, canvas.height);
@@ -710,9 +737,80 @@ function drawVideoFrame() {
                 bgCtx.drawImage(mpResults.segmentationMask, 0, 0, bgCanvas.width, bgCanvas.height);
 
                 // 4. Superponer el fondo difuminado recortado sobre la imagen (camufla a la persona)
-                mpCanvasCtx.globalCompositeOperation = "source-over";
                 mpCanvasCtx.drawImage(bgCanvas, 0, 0);
                 break;
+            }
+
+            case "static-silhouette": { // Silueta estática: fondo real + silueta rellena de ruido TV
+                mpCanvasCtx.clearRect(0, 0, canvas.width, canvas.height);
+
+                // 1. Dibujar el fondo del video
+                mpCanvasCtx.drawImage(mpResults.image, 0, 0, canvas.width, canvas.height);
+
+                // 2. Generar ruido tipo televisor en un canvas temporal
+                const noiseCanvas = document.createElement('canvas');
+                noiseCanvas.width = canvas.width;
+                noiseCanvas.height = canvas.height;
+                const noiseCtx = noiseCanvas.getContext('2d');
+                const imageData = noiseCtx.createImageData(noiseCanvas.width, noiseCanvas.height);
+                const data = imageData.data;
+                for (let i = 0; i < data.length; i += 4) {
+                    const v = Math.random() * 255;
+                    data[i]     = v;
+                    data[i + 1] = v;
+                    data[i + 2] = v;
+                    data[i + 3] = 255;
+                }
+                noiseCtx.putImageData(imageData, 0, 0);
+
+                // 3. Recortar el ruido a la silueta de la persona
+                noiseCtx.globalCompositeOperation = "destination-in";
+                noiseCtx.drawImage(mpResults.segmentationMask, 0, 0, noiseCanvas.width, noiseCanvas.height);
+
+                // 4. Dibujar el ruido recortado sobre el fondo
+                mpCanvasCtx.drawImage(noiseCanvas, 0, 0);
+                break;
+            }
+
+            case "echo-visual": { // Eco visual: siluetas repetidas desplazadas detrás de la persona
+                mpCanvasCtx.clearRect(0, 0, canvas.width, canvas.height);
+
+                // 1. Dibujar el fondo del video
+                mpCanvasCtx.drawImage(mpResults.image, 0, 0, canvas.width, canvas.height);
+
+                // 2. Crear silueta recortada de la persona (en blanco/negro) en canvas temporal
+                const ecoBase = document.createElement('canvas');
+                ecoBase.width = canvas.width;
+                ecoBase.height = canvas.height;
+                const ecoCtx = ecoBase.getContext('2d');
+
+                // Silueta oscura semitransparente
+                ecoCtx.fillStyle = "rgba(0, 0, 0, 1)";
+                ecoCtx.fillRect(0, 0, ecoBase.width, ecoBase.height);
+                ecoCtx.globalCompositeOperation = "destination-in";
+                ecoCtx.drawImage(mpResults.segmentationMask, 0, 0, ecoBase.width, ecoBase.height);
+
+                // 3. Dibujar 4 ecos desplazados hacia atrás (con opacidad decreciente)
+                const echoCount = 4;
+                const stepX = 18; // desplazamiento horizontal por eco
+                const stepY = 8;  // leve desplazamiento vertical
+                for (let i = echoCount; i >= 1; i--) {
+                    mpCanvasCtx.globalAlpha = 0.18 * (echoCount - i + 1) / echoCount;
+                    mpCanvasCtx.drawImage(ecoBase, stepX * i, stepY * i);
+                }
+
+                // 4. Dibujar la silueta original del video (recortada) encima, nítida
+                mpCanvasCtx.globalAlpha = 1.0;
+                const personCanvas = document.createElement('canvas');
+                personCanvas.width = canvas.width;
+                personCanvas.height = canvas.height;
+                const personCtx = personCanvas.getContext('2d');
+                personCtx.drawImage(mpResults.image, 0, 0, personCanvas.width, personCanvas.height);
+                personCtx.globalCompositeOperation = "destination-in";
+                personCtx.drawImage(mpResults.segmentationMask, 0, 0, personCanvas.width, personCanvas.height);
+                mpCanvasCtx.drawImage(personCanvas, 0, 0);
+                break;
+            }
         }
         mpCanvasCtx.globalCompositeOperation = "source-over"; // Resetear para futuros dibujos
 
@@ -756,7 +854,8 @@ function drawVideoFrame() {
             case 'kaleidoscope': filterIndex = 10; break;
             case 'mirror': filterIndex = 11; break;
             case 'fisheye': filterIndex = 12; break;
-            case 'recuerdo': filterIndex = 13; break; // Filtro Recuerdo
+            case 'recuerdo': filterIndex = 13; break;
+            case 'glitch2': filterIndex = 14; break;
             default: filterIndex = 0; break;
         }
         gl.uniform1i(filterTypeLocation, filterIndex);
