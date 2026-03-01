@@ -116,6 +116,7 @@ const fsSource = `
     const int FILTER_RECUERDO = 13; // Filtro "Recuerdo" (WebGL puro y post-proceso)
     const int FILTER_GLITCH2 = 14;  // Glitch 2: interferencia intensa rosas y verdes
     const int FILTER_VHS = 15;      // VHS: efecto de cinta de vídeo
+    const int FILTER_GLITCH3 = 16;  // Glitch3: osciladores modulados cruzados (Hydra-style)
 
     // Función para generar ruido básico
     float random(vec2 st) {
@@ -441,6 +442,66 @@ const fsSource = `
 
             // Aplicar scanlines
             finalColor = clamp(chromaColor * scanFactor, 0.0, 1.0);
+        } else if (u_filterType == FILTER_GLITCH3) {
+            vec2 uv = texCoord;
+
+            // --- o1: osc(20,0.2,0).color(2,0.7,0.1).mult(osc(40)).modulateRotate(o0,0.2).rotate(0.2) ---
+            // Primero construimos o0 base y luego o1, y los combinamos con diff.
+
+            // Helper: rotar coordenadas alrededor del centro
+            float cosA0 = cos(0.5);
+            float sinA0 = sin(0.5);
+            vec2 uvR0 = uv - 0.5;
+            uvR0 = vec2(cosA0 * uvR0.x - sinA0 * uvR0.y, sinA0 * uvR0.x + cosA0 * uvR0.y) + 0.5;
+
+            // o0: osc(18,0.1,0) — onda sinusoidal horizontal
+            float osc0 = sin(uvR0.x * 18.0 + u_time * 0.1) * 0.5 + 0.5;
+            // .color(2,0.1,2) — tinte magenta intenso
+            vec3 col0 = vec3(osc0 * 2.0, osc0 * 0.1, osc0 * 2.0);
+
+            // .mult(osc(20,0.01,0)) — multiplicar por otra onda
+            float osc0b = sin(uvR0.x * 20.0 + u_time * 0.01) * 0.5 + 0.5;
+            col0 *= osc0b;
+
+            // .repeat(2,20) — tiling 2x horizontal, 20x vertical
+            vec2 uvRep = fract(uvR0 * vec2(2.0, 20.0));
+
+            // .modulate(o1) — modulación de posición con output anterior (usamos video como proxy)
+            vec4 modSample = texture2D(u_image, uv);
+            vec2 uvMod = fract(uvRep + modSample.rg * 0.08);
+
+            // .scale(1, fft[0]*0.9+2) — escala vertical dinámica con tiempo
+            float scaleY = sin(u_time * 1.3) * 0.45 + 2.0; // simula fft[0] oscilando
+            vec2 uvScaled = uvMod;
+            uvScaled.y = (uvScaled.y - 0.5) / scaleY + 0.5;
+
+            float osc0_final = sin(uvScaled.x * 18.0 + u_time * 0.1) * 0.5 + 0.5;
+            vec3 o0_color = vec3(osc0_final * 2.0, osc0_final * 0.1, osc0_final * 2.0) * osc0b;
+
+            // --- o1: osc(20,0.2,0).color(2,0.7,0.1).mult(osc(40)).modulateRotate(o0,0.2).rotate(0.2) ---
+            float cosA1 = cos(0.2 + u_time * 0.05);
+            float sinA1 = sin(0.2 + u_time * 0.05);
+            vec2 uvR1 = uv - 0.5;
+            // modulateRotate con o0: rotar según luminancia de o0
+            float o0lum = dot(o0_color, vec3(0.299, 0.587, 0.114));
+            float rotAngle = o0lum * 0.2;
+            float cR = cos(rotAngle); float sR = sin(rotAngle);
+            uvR1 = vec2(cR * uvR1.x - sR * uvR1.y, sR * uvR1.x + cR * uvR1.y);
+            uvR1 = vec2(cosA1 * uvR1.x - sinA1 * uvR1.y, sinA1 * uvR1.x + cosA1 * uvR1.y) + 0.5;
+
+            float osc1a = sin(uvR1.x * 20.0 + u_time * 0.2) * 0.5 + 0.5;
+            float osc1b = sin(uvR1.x * 40.0 + u_time * 0.3) * 0.5 + 0.5;
+            vec3 o1_color = vec3(osc1a * 2.0, osc1a * 0.7, osc1a * 0.1) * osc1b;
+
+            // .diff(o1) — diferencia absoluta entre o0 y o1
+            vec3 diffColor = abs(o0_color - o1_color);
+
+            // Mezclar con el video original para mantener la imagen reconocible
+            vec4 camColor = texture2D(u_image, uv);
+            vec3 blended = mix(camColor.rgb, diffColor, 0.72);
+
+            finalColor = clamp(blended, 0.0, 1.0);
+        }
 
         gl_FragColor = vec4(finalColor, alpha);
     }
@@ -746,9 +807,9 @@ function drawVideoFrame() {
     const currentTime = performance.now() / 1000.0;
     gl.uniform1f(timeLocation, currentTime);
 
-    // Cámara frontal: aplicar espejo para que la imagen sea especular (natural para el usuario). Trasera: sin espejo.
+    // Cámara frontal: sin espejo adicional (el stream frontal ya es correcto). Trasera: espejo horizontal.
     const isFront = (currentFacingMode === 'user' || currentFacingMode === 'unknown');
-    gl.uniform1f(flipXLocation, isFront ? -1.0 : 1.0);
+    gl.uniform1f(flipXLocation, isFront ? 1.0 : -1.0);
 
     // Los filtros eliminados se quitan de la lista de MediaPipe
     const isMediaPipeFilter = ['whiteGlow', 'blackBg', 'whiteBg', 'blur', 'static-silhouette', 'echo-visual'].includes(selectedFilter);
@@ -941,6 +1002,7 @@ function drawVideoFrame() {
             case 'recuerdo': filterIndex = 13; break;
             case 'glitch2': filterIndex = 14; break;
             case 'vhs': filterIndex = 15; break;
+            case 'glitch3': filterIndex = 16; break;
             default: filterIndex = 0; break;
         }
         gl.uniform1i(filterTypeLocation, filterIndex);
