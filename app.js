@@ -1,88 +1,87 @@
-let video = document.getElementById('video');
-let glcanvas = document.getElementById('glcanvas');
-let canvas = document.getElementById('canvas'); // Canvas 2D auxiliar para MediaPipe
-let filterSelect = document.getElementById('filterSelect');
-let captureBtn = document.getElementById('capture-button');
-let recordBtn = document.getElementById('record-button');
-let pauseBtn = document.getElementById('pause-button');
-let stopBtn = document.getElementById('stop-button');
-let fullscreenBtn = document.getElementById('fullscreen-button');
-let filterBtn = document.getElementById('filter-button');
-let filtersDropdown = document.getElementById('filters-dropdown');
-let gallery = document.getElementById('gallery');
-let controls = document.getElementById('controls');
-let recordingControls = document.getElementById('recording-controls');
-let cameraContainer = document.getElementById('camera-container');
+// --- REFERENCIAS DOM ---
+const video        = document.getElementById('video');
+const glcanvas     = document.getElementById('glcanvas');
+const canvas       = document.getElementById('canvas');
+const filterSelect = document.getElementById('filterSelect');
+const captureBtn   = document.getElementById('capture-button');
+const recordBtn    = document.getElementById('record-button');
+const pauseBtn     = document.getElementById('pause-button');
+const stopBtn      = document.getElementById('stop-button');
+const fullscreenBtn    = document.getElementById('fullscreen-button');
+const filterBtn        = document.getElementById('filter-button');
+const filtersDropdown  = document.getElementById('filters-dropdown');
+const gallery          = document.getElementById('gallery');
+const controls         = document.getElementById('controls');
+const recordingControls = document.getElementById('recording-controls');
+const cameraContainer  = document.getElementById('camera-container');
 
+// --- ESTADO GENERAL ---
 let currentStream;
 let mediaRecorder;
 let chunks = [];
 let isRecording = false;
-let isPaused = false;
+let isPaused    = false;
 let selectedFilter = 'none';
 let currentCameraDeviceId = null;
-let currentFacingMode = null;
-let mediaCounter = 0; // Contador para enumerar las fotos y videos
+let currentFacingMode     = null;
+let mediaCounter = 0;
+let availableCameraDevices = [];
 
-// --- VARIABLES Y CONFIGURACIÓN DE WEBG L ---
-let gl; // Contexto WebGL
-let program; // Programa de shaders
-let positionBuffer; // Buffer para las posiciones de los vértices
-let texCoordBuffer; // Buffer para las coordenadas de textura
-let videoTexture; // Textura donde se cargará el fotograma del video (para filtros WebGL)
-let mpOutputTexture; // Nueva textura para el output de MediaPipe (para filtros avanzados)
-let filterTypeLocation; // Ubicación del uniform para el tipo de filtro
-let timeLocation; // Ubicación del uniform para el tiempo (para efectos dinámicos)
-let flipXLocation; // Ubicación del uniform para el espejo horizontal
+// --- WEBGL ---
+let gl;
+let program;
+let positionBuffer;
+let texCoordBuffer;
+let videoTexture;
+let mpOutputTexture;
+let filterTypeLocation;
+let timeLocation;
+let flipXLocation;
+let colorShiftUniformLocation;
+let bassAmpUniformLocation;
+let midAmpUniformLocation;
+let highAmpUniformLocation;
 
-// --- VARIABLES Y CONFIGURACIÓN DE AUDIO ---
+// --- AUDIO ---
 let audioContext;
 let analyser;
 let microphone;
 let dataArray;
 const AUDIO_THRESHOLD = 0.15;
-
 let paletteIndex = 0;
 const palettes = [
-    [1.0, 0.0, 0.0],
-    [0.0, 1.0, 0.0],
-    [0.0, 0.0, 1.0],
-    [1.0, 1.0, 0.0],
-    [1.0, 0.0, 1.0],
-    [0.0, 1.0, 1.0],
+    [1.0,0.0,0.0],[0.0,1.0,0.0],[0.0,0.0,1.0],
+    [1.0,1.0,0.0],[1.0,0.0,1.0],[0.0,1.0,1.0],
 ];
-let colorShiftUniformLocation;
+// Buffer reutilizable para evitar allocations en cada frame
+const colorShiftBuffer = new Float32Array(3);
 
-// --- NUEVOS UNIFORMS PARA EL FILTRO MODULAR COLOR SHIFT ---
-let bassAmpUniformLocation;
-let midAmpUniformLocation;
-let highAmpUniformLocation;
-
-// --- VARIABLES Y CONFIGURACIÓN DE MEDIAPIPE ---
+// --- MEDIAPIPE ---
 let selfieSegmentation;
 let mpCamera;
-let mpResults = null; // Para almacenar el último resultado de MediaPipe
-let mpCanvasCtx = canvas.getContext('2d'); // Contexto 2D para el canvas auxiliar
-let mpProcessing = false; // Bandera para controlar si MediaPipe está procesando
+let mpResults    = null;
+let mpProcessing = false;
+const mpCanvasCtx = canvas.getContext('2d');
 
-// Vertex Shader: define la posición de los vértices y las coordenadas de textura
+// Canvases temporales reutilizables (evita crearlos cada frame en los filtros MP)
+const tempCanvasA = document.createElement('canvas');
+const tempCtxA    = tempCanvasA.getContext('2d');
+const tempCanvasB = document.createElement('canvas');
+const tempCtxB    = tempCanvasB.getContext('2d');
+
+// --- SHADERS ---
 const vsSource = `
     attribute vec4 a_position;
     attribute vec2 a_texCoord;
     uniform float u_flipX;
-
     varying vec2 v_texCoord;
-
     void main() {
         gl_Position = a_position;
-        // u_flipX: 1.0 = sin espejo (frontal), -1.0 = con espejo (trasera)
-        // Si flipX==1 -> coordX = x, si flipX==-1 -> coordX = 1-x
         float coordX = 0.5 + (a_texCoord.x - 0.5) * u_flipX;
         v_texCoord = vec2(coordX, a_texCoord.y);
     }
 `;
 
-// Fragment Shader: define el color de cada píxel, ahora con lógica de filtros
 const fsSource = `
     precision mediump float;
 
@@ -91,7 +90,6 @@ const fsSource = `
     uniform vec2 u_resolution;
     uniform float u_time;
     uniform vec3 u_colorShift;
-
     uniform float u_bassAmp;
     uniform float u_midAmp;
     uniform float u_highAmp;
@@ -99,1298 +97,776 @@ const fsSource = `
 
     varying vec2 v_texCoord;
 
-    // Enumeración de filtros (coincide con los índices en JavaScript)
-    const int FILTER_NONE = 0;
-    const int FILTER_GRAYSCALE = 1;
-    const int FILTER_INVERT = 2;
-    const int FILTER_SEPIA = 3;
-    const int FILTER_ECO_PINK = 4;
-    const int FILTER_WEIRD = 5;
-    const int FILTER_GLOW_OUTLINE = 6;
-    const int FILTER_ANGELICAL_GLITCH = 7;
-    const int FILTER_AUDIO_COLOR_SHIFT = 8;
+    const int FILTER_NONE               = 0;
+    const int FILTER_GRAYSCALE          = 1;
+    const int FILTER_INVERT             = 2;
+    const int FILTER_SEPIA              = 3;
+    const int FILTER_ECO_PINK           = 4;
+    const int FILTER_WEIRD              = 5;
+    const int FILTER_GLOW_OUTLINE       = 6;
+    const int FILTER_ANGELICAL_GLITCH   = 7;
+    const int FILTER_AUDIO_COLOR_SHIFT  = 8;
     const int FILTER_MODULAR_COLOR_SHIFT = 9;
-    const int FILTER_KALEIDOSCOPE = 10;
-    const int FILTER_MIRROR = 11;
-    const int FILTER_FISHEYE = 12;
-    const int FILTER_RECUERDO = 13; // Filtro "Recuerdo" (WebGL puro y post-proceso)
-    const int FILTER_GLITCH2 = 14;  // Glitch 2: interferencia intensa rosas y verdes
-    const int FILTER_VHS = 15;      // VHS: efecto de cinta de vídeo
-    const int FILTER_GLITCH3 = 16;  // Glitch3: osciladores Hydra-style
+    const int FILTER_KALEIDOSCOPE       = 10;
+    const int FILTER_MIRROR             = 11;
+    const int FILTER_FISHEYE            = 12;
+    const int FILTER_RECUERDO           = 13;
+    const int FILTER_GLITCH2            = 14;
+    const int FILTER_VHS                = 15;
 
-    // Función para generar ruido básico
     float random(vec2 st) {
-        return fract(sin(dot(st.xy, vec2(12.9898,78.233))) * 43758.5453123);
-    }
-    
-    // Función de brillo para detectar luz
-    float brightness(vec3 color) {
-        return dot(color, vec3(0.299, 0.587, 0.114));
+        return fract(sin(dot(st.xy, vec2(12.9898, 78.233))) * 43758.5453123);
     }
 
-    // Rotar un punto alrededor del centro
-    vec2 rotate2D(vec2 st, float angle) {
-        st -= 0.5;
-        st = mat2(cos(angle), -sin(angle), sin(angle), cos(angle)) * st;
-        st += 0.5;
-        return st;
+    float brightness(vec3 c) {
+        return dot(c, vec3(0.299, 0.587, 0.114));
     }
 
-    // Efecto de ojo de pez
     vec2 fisheye(vec2 uv, float strength) {
-        vec2 centered = uv * 2.0 - 1.0; // Coordenadas de -1 a 1
-        float r = length(centered);
-        float theta = atan(centered.y, centered.x);
-        
-        float r_distorted = r;
-        if (strength > 0.0) { // Convexo
-            r_distorted = r / (1.0 - strength * r);
-        } else { // Cóncavo
-            r_distorted = r * (1.0 + strength * r);
-        }
-        
-        vec2 distorted_centered = vec2(r_distorted * cos(theta), r_distorted * sin(theta));
-        return (distorted_centered + 1.0) * 0.5; // Devolver a 0-1
+        vec2 c  = uv * 2.0 - 1.0;
+        float r = length(c);
+        float theta = atan(c.y, c.x);
+        float rd = (strength > 0.0) ? r / (1.0 - strength * r) : r * (1.0 + strength * r);
+        return (vec2(rd * cos(theta), rd * sin(theta)) + 1.0) * 0.5;
     }
 
     void main() {
-        vec2 texCoord = v_texCoord;
-        vec4 color = texture2D(u_image, texCoord);
+        vec2 texCoord   = v_texCoord;
+        vec4 color      = texture2D(u_image, texCoord);
         vec3 finalColor = color.rgb;
-        float alpha = color.a;
+        float alpha     = color.a;
 
         if (u_filterType == FILTER_GRAYSCALE) {
-            float brightness = (color.r * 0.2126 + color.g * 0.7152 + color.b * 0.0722);
-            finalColor = vec3(brightness);
+            float lum = color.r * 0.2126 + color.g * 0.7152 + color.b * 0.0722;
+            finalColor = vec3(lum);
+
         } else if (u_filterType == FILTER_INVERT) {
             finalColor = 1.0 - finalColor;
+
         } else if (u_filterType == FILTER_SEPIA) {
-            float r = color.r;
-            float g = color.g;
-            float b = color.b;
-            finalColor.r = (r * 0.393) + (g * 0.769) + (b * 0.189);
-            finalColor.g = (r * 0.349) + (g * 0.686) + (b * 0.168);
-            finalColor.b = (r * 0.272) + (g * 0.534) + (b * 0.131);
-            finalColor = clamp(finalColor, 0.0, 1.0);
+            float sr = color.r, sg = color.g, sb = color.b;
+            finalColor = clamp(vec3(
+                sr*0.393 + sg*0.769 + sb*0.189,
+                sr*0.349 + sg*0.686 + sb*0.168,
+                sr*0.272 + sg*0.534 + sb*0.131
+            ), 0.0, 1.0);
+
         } else if (u_filterType == FILTER_ECO_PINK) {
-            float brightness = (color.r + color.g + color.b) / 3.0;
-            if (brightness < 0.3137) {
-                finalColor.r = min(1.0, color.r + (80.0/255.0));
-                finalColor.g = max(0.0, color.g - (50.0/255.0));
-                finalColor.b = min(1.0, color.b + (100.0/255.0));
+            float bri = (color.r + color.g + color.b) / 3.0;
+            if (bri < 0.3137) {
+                finalColor = vec3(
+                    min(1.0, color.r + 0.3137),
+                    max(0.0, color.g - 0.1961),
+                    min(1.0, color.b + 0.3922)
+                );
             }
+
         } else if (u_filterType == FILTER_WEIRD) {
-            float brightness = (color.r + color.g + color.b) / 3.0;
-            if (brightness > 0.7058) {
-                float temp_r = color.r;
-                finalColor.r = color.b;
-                finalColor.b = color.g;
-                finalColor.g = temp_r;
-            } else if (brightness < 0.3921) {
-                finalColor *= 0.5;
-            }
+            float bri = (color.r + color.g + color.b) / 3.0;
+            if      (bri > 0.7058) finalColor = vec3(color.b, color.r, color.g);
+            else if (bri < 0.3921) finalColor *= 0.5;
+
         } else if (u_filterType == FILTER_GLOW_OUTLINE) {
-            vec2 onePixel = vec2(1.0, 1.0) / u_resolution;
-            float distortionFactor = 0.005;
-            vec2 offsetUp = vec2(sin(texCoord.y * 100.0) * distortionFactor, onePixel.y + cos(texCoord.x * 100.0) * distortionFactor);
-            vec2 offsetDown = vec2(cos(texCoord.y * 100.0) * distortionFactor, -onePixel.y + sin(texCoord.x * 100.0) * distortionFactor);
-            vec2 offsetLeft = vec2(-onePixel.x + sin(texCoord.y * 100.0) * distortionFactor, cos(texCoord.x * 100.0) * distortionFactor);
-            vec2 offsetRight = vec2(onePixel.x + cos(texCoord.y * 100.0) * distortionFactor, sin(texCoord.x * 100.0) * distortionFactor);
-
-            vec4 up = texture2D(u_image, texCoord + offsetUp);
-            vec4 down = texture2D(u_image, texCoord + offsetDown);
-            vec4 left = texture2D(u_image, texCoord + offsetLeft);
-            vec4 right = texture2D(u_image, texCoord + offsetRight);
-
-            float diff = abs(color.r - up.r) + abs(color.r - down.r) + abs(color.r - left.r) + abs(color.r - right.r);
+            vec2 px = 1.0 / u_resolution;
+            float df = 0.005;
+            vec4 up = texture2D(u_image, texCoord + vec2( sin(texCoord.y*100.0)*df,  px.y+cos(texCoord.x*100.0)*df));
+            vec4 dn = texture2D(u_image, texCoord + vec2( cos(texCoord.y*100.0)*df, -px.y+sin(texCoord.x*100.0)*df));
+            vec4 lt = texture2D(u_image, texCoord + vec2(-px.x+sin(texCoord.y*100.0)*df, cos(texCoord.x*100.0)*df));
+            vec4 rt = texture2D(u_image, texCoord + vec2( px.x+cos(texCoord.y*100.0)*df, sin(texCoord.x*100.0)*df));
+            float diff = abs(color.r-up.r)+abs(color.r-dn.r)+abs(color.r-lt.r)+abs(color.r-rt.r);
             float edge = smoothstep(0.01, 0.1, diff);
-            vec3 outlineColor = vec3(1.0);
+            float glow = smoothstep(0.7, 1.0, brightness(color.rgb)) * 0.5;
+            finalColor = mix(finalColor + glow, vec3(1.0), edge);
 
-            float brightness = dot(color.rgb, vec3(0.299, 0.587, 0.114));
-            float glowFactor = smoothstep(0.7, 1.0, brightness) * 0.5;
-
-            finalColor = mix(finalColor + glowFactor, outlineColor, edge);
         } else if (u_filterType == FILTER_ANGELICAL_GLITCH) {
-            vec2 uv = texCoord;
-
+            vec2 uv  = texCoord;
             vec4 col = texture2D(u_image, uv);
             col.rgb *= 1.3;
-
-            float b = brightness(col.rgb);
-
-            vec2 distortion = vec2(
-                (random(uv + vec2(sin(u_time * 0.1), cos(u_time * 0.1))) - 0.5) * 0.1,
-                (random(uv + vec2(cos(u_time * 0.1), sin(u_time * 0.1))) - 0.5) * 0.1
+            float b  = brightness(col.rgb);
+            vec2 dist = vec2(
+                (random(uv + vec2(sin(u_time*0.1), cos(u_time*0.1))) - 0.5) * 0.1,
+                (random(uv + vec2(cos(u_time*0.1), sin(u_time*0.1))) - 0.5) * 0.1
             );
-            
-            vec4 distorted = texture2D(u_image, uv + distortion);
-
+            vec4 distorted = texture2D(u_image, uv + dist);
             if (b > 0.5) {
-                vec3 glowColor = vec3(
-                    0.5 + 0.3 * sin(u_time * 2.0),
-                    0.2 + 0.5 * cos(u_time * 1.5),
-                    0.6 + 0.4 * sin(u_time * 3.0)
-                );
-
-                finalColor = mix(distorted.rgb, glowColor, 0.5);
+                vec3 gc = vec3(0.5+0.3*sin(u_time*2.0), 0.2+0.5*cos(u_time*1.5), 0.6+0.4*sin(u_time*3.0));
+                finalColor = mix(distorted.rgb, gc, 0.5);
             } else {
                 finalColor = distorted.rgb;
             }
             alpha = col.a;
-        } else if (u_filterType == FILTER_AUDIO_COLOR_SHIFT) { 
+
+        } else if (u_filterType == FILTER_AUDIO_COLOR_SHIFT) {
             finalColor = mod(color.rgb + u_colorShift, 1.0);
+
         } else if (u_filterType == FILTER_MODULAR_COLOR_SHIFT) {
-            const vec3 palette0 = vec3(80.0/255.0, 120.0/255.0, 180.0/255.0);
-            const vec3 palette1 = vec3(100.0/255.0, 180.0/255.0, 200.0/255.0);
-            const vec3 palette2 = vec3(120.0/255.0, 150.0/255.0, 255.0/255.0);
+            const vec3 p0 = vec3(0.3137, 0.4706, 0.7059);
+            const vec3 p1 = vec3(0.3922, 0.7059, 0.7843);
+            const vec3 p2 = vec3(0.4706, 0.5882, 1.0);
+            float bv = (color.r + color.g + color.b) / 3.0;
+            if      (bv > 0.6667) finalColor = clamp(mix(color.rgb, p2, u_highAmp), 0.0, 1.0);
+            else if (bv > 0.3922) finalColor = clamp(mix(color.rgb, p1, u_midAmp),  0.0, 1.0);
+            else                  finalColor = clamp(mix(color.rgb, p0, u_bassAmp), 0.0, 1.0);
 
-            float brightness_val = (color.r + color.g + color.b) / 3.0;
-
-            if (brightness_val > (170.0/255.0)) {
-                finalColor.rgb = mix(color.rgb, palette2, u_highAmp);
-            } else if (brightness_val > (100.0/255.0)) {
-                finalColor.rgb = mix(color.rgb, palette1, u_midAmp);
-            } else {
-                finalColor.rgb = mix(color.rgb, palette0, u_bassAmp);
-            }
-            finalColor.rgb = clamp(finalColor.rgb, 0.0, 1.0);
         } else if (u_filterType == FILTER_KALEIDOSCOPE) {
-            // Caleidoscopio de 6 sectores
-            vec2 c = texCoord - 0.5;
+            vec2 c  = texCoord - 0.5;
             float r = length(c);
-            float angle = atan(c.y, c.x);
-            angle = mod(angle, radians(60.0)); // 360 / 6 = 60 grados por sector
-            angle = abs(angle - radians(30.0)); // Reflejar en el centro del sector
-            
-            vec2 newTexCoord = vec2(r * cos(angle), r * sin(angle)) + 0.5;
-            finalColor = texture2D(u_image, newTexCoord).rgb;
+            float angle = abs(mod(atan(c.y, c.x), radians(60.0)) - radians(30.0));
+            finalColor = texture2D(u_image, vec2(r*cos(angle), r*sin(angle)) + 0.5).rgb;
+
         } else if (u_filterType == FILTER_MIRROR) {
             vec2 uv = texCoord;
-            if (uv.x > 0.5) {
-                uv.x = 1.0 - uv.x;
-            }
+            if (uv.x > 0.5) uv.x = 1.0 - uv.x;
             finalColor = texture2D(u_image, uv).rgb;
+
         } else if (u_filterType == FILTER_FISHEYE) {
-            finalColor = texture2D(u_image, fisheye(texCoord, 0.8)).rgb; // 0.8 para un efecto convexo fuerte
+            finalColor = texture2D(u_image, fisheye(texCoord, 0.8)).rgb;
+
         } else if (u_filterType == FILTER_RECUERDO) {
-            vec2 uv = texCoord;
-            
-            // 1. Distorsión amorfa/Oscilación MÁS SUAVE (wobble=0.01)
-            float wobble = sin(u_time * 0.8) * 0.01; // Menor deformación
-            uv.x += sin(uv.y * 20.0 + u_time * 3.0) * wobble; 
-            uv.y += cos(uv.x * 22.0 + u_time * 2.5) * wobble; 
+            vec2 uv    = texCoord;
+            float wob  = sin(u_time * 0.8) * 0.01;
+            uv.x += sin(uv.y * 20.0 + u_time * 3.0) * wob;
+            uv.y += cos(uv.x * 22.0 + u_time * 2.5) * wob;
+            float grain = random(uv * u_time) * 0.1;
+            vec2 dir    = uv - 0.5;
+            float focus = smoothstep(0.4, 0.2, length(dir) * 2.5);
+            float bstr  = (1.0 - focus) * 0.015;
+            vec4 blurred = vec4(0.0);
+            const float N = 8.0;
+            for (float i = 0.0; i < N; i++) blurred += texture2D(u_image, uv + dir * bstr * (i / N));
+            blurred /= N;
+            vec3 mixed = mix(blurred, texture2D(u_image, uv), focus).rgb * vec3(1.1, 1.05, 0.9);
+            float mr = mixed.r, mg = mixed.g, mb = mixed.b;
+            vec3 sep = clamp(vec3(mr*0.393+mg*0.769+mb*0.189, mr*0.349+mg*0.686+mb*0.168, mr*0.272+mg*0.534+mb*0.131), 0.0, 1.0);
+            finalColor  = clamp(mix(mixed, sep, 0.5) + grain, 0.0, 1.0);
 
-            // 2. Ruido visual (Grano)
-            float grain = random(uv * u_time) * 0.1; 
-            
-            // 3. Desenfoque Radial y Punto de enfoque MÁS COMPRIMIDO
-            vec2 center = vec2(0.5, 0.5);
-            vec2 direction = uv - center;
-            float dist = length(direction);
-            
-            // Enfoque/Máscara de la zona nítida
-            float focus = smoothstep(0.4, 0.2, dist * 2.5); 
-
-            // Implementación de Desenfoque Radial
-            vec4 blurredColor = vec4(0.0);
-            
-            const float blurSamples = 8.0;
-            float blurStrength = (1.0 - focus) * 0.015; // La fuerza del blur es inversamente proporcional al foco
-            
-            // Muestreo radial a lo largo de la dirección
-            for (float i = 0.0; i < blurSamples; i++) {
-                // Offset a lo largo del vector "direction"
-                vec2 offset = direction * blurStrength * (i / blurSamples); 
-                blurredColor += texture2D(u_image, uv + offset);
-            }
-            blurredColor /= blurSamples;
-
-            // Mezclar entre el color borroso y el original (nítido) usando 'focus'
-            vec4 originalColor = texture2D(u_image, uv);
-            vec4 finalColorMixed = mix(blurredColor, originalColor, focus);
-
-            // 4. Aplicar Color (Tonos lavados / Sobreexposición leve)
-            finalColor = finalColorMixed.rgb * vec3(1.1, 1.05, 0.9); 
-
-            // 5. Aplicar Sepia (tonos lavados)
-            float r = finalColor.r;
-            float g = finalColor.g;
-            float b = finalColor.b;
-            
-            float sepiaR = (r * 0.393) + (g * 0.769) + (b * 0.189);
-            float sepiaG = (r * 0.349) + (g * 0.686) + (b * 0.168);
-            float sepiaB = (r * 0.272) + (g * 0.534) + (b * 0.131);
-            
-            vec3 sepiaColor = clamp(vec3(sepiaR, sepiaG, sepiaB), 0.0, 1.0);
-            
-            finalColor = mix(finalColor, sepiaColor, 0.5); 
-            
-            // 6. Aplicar Ruido
-            finalColor += grain;
-            
-            finalColor = clamp(finalColor, 0.0, 1.0); 
         } else if (u_filterType == FILTER_GLITCH2) {
-            vec2 uv = texCoord;
-
-            // --- Movimientos bruscos globales (frame jumps) ---
-            // Cada ~0.08s hay un "golpe" aleatorio que desplaza toda la imagen
-            float jumpTime = floor(u_time * 12.0);
-            float jumpRnd = random(vec2(jumpTime * 0.017, jumpTime * 0.031));
-            float jumpRnd2 = random(vec2(jumpTime * 0.053, jumpTime * 0.072));
-            // Solo ocurre en ~25% de los frames
-            float jumpX = 0.0;
-            float jumpY = 0.0;
-            if (jumpRnd > 0.75) {
-                jumpX = (jumpRnd - 0.75) * 0.18 * sign(jumpRnd2 - 0.5);
-                jumpY = (jumpRnd2 - 0.5) * 0.06;
-            }
-            uv.x = fract(uv.x + jumpX);
-            uv.y = fract(uv.y + jumpY);
-
-            // --- Distorsión de rostro: zona superior-central (aprox donde está la cara) ---
-            // Aplica wobble intenso a la franja vertical 0.1–0.5 del canvas
-            float faceZone = smoothstep(0.08, 0.14, uv.y) * (1.0 - smoothstep(0.50, 0.56, uv.y));
-            float faceZoneX = smoothstep(0.20, 0.30, uv.x) * (1.0 - smoothstep(0.70, 0.80, uv.x));
-            float faceMask = faceZone * faceZoneX;
-            float faceWobbleX = sin(uv.y * 60.0 + u_time * 18.0) * 0.025 * faceMask;
-            float faceWobbleY = cos(uv.x * 45.0 + u_time * 14.0) * 0.018 * faceMask;
-            // Glitch de bloques en el rostro
-            float faceBlockY = floor(uv.y * 80.0) / 80.0;
-            float faceGlitch = random(vec2(faceBlockY * 3.1, floor(u_time * 20.0) * 0.7));
-            float faceShift = 0.0;
-            if (faceGlitch > 0.70 && faceMask > 0.3) {
-                faceShift = (faceGlitch - 0.70) * 0.35;
-            }
-            uv.x = fract(uv.x + faceWobbleX + faceShift);
-            uv.y = fract(uv.y + faceWobbleY);
-
-            // --- Líneas de glitch horizontales: bloques de filas desplazados ---
-            float blockY = floor(uv.y * 40.0) / 40.0;
-            float glitchSeed = random(vec2(blockY, floor(u_time * 12.0)));
-            float glitchSeed2 = random(vec2(blockY + 0.3, floor(u_time * 8.0)));
-            float shift = 0.0;
-            if (glitchSeed > 0.65) {
-                shift = (glitchSeed - 0.65) * 1.2;
-            }
-            uv.x = fract(uv.x + shift);
-
-            // --- Aberración cromática intensa ---
-            float aberration = 0.018 + glitchSeed2 * 0.025 + abs(jumpX) * 0.3;
-            float r = texture2D(u_image, vec2(uv.x + aberration, uv.y)).r;
-            float g = texture2D(u_image, uv).g;
-            float b = texture2D(u_image, vec2(uv.x - aberration, uv.y)).b;
-            vec3 aberrated = vec3(r, g, b);
-
-            // --- Paleta rosas y verdes vivos ---
-            float lum = (aberrated.r * 0.299 + aberrated.g * 0.587 + aberrated.b * 0.114);
-            vec3 pink  = vec3(1.0, 0.05, 0.75);
-            vec3 green = vec3(0.0, 1.0, 0.2);
-            float wave = sin(uv.y * 18.0 + u_time * 5.0) * 0.5 + 0.5;
-            vec3 palette = mix(pink, green, wave);
-            vec3 colorized = mix(aberrated * 0.3, palette, smoothstep(0.2, 0.8, lum));
-
-            // --- Scanlines con píxeles corruptos ---
-            float scanline = mod(floor(uv.y * u_resolution.y), 3.0);
-            float noise = random(vec2(uv.x * 100.0, floor(u_time * 20.0) + uv.y * 50.0));
-            if (scanline == 0.0 && noise > 0.6) {
-                colorized = mix(colorized, palette.brg, 0.8);
-            }
-
-            // --- Flash blanco breve en momentos de golpe ---
-            float flash = 0.0;
-            if (jumpRnd > 0.88) flash = (jumpRnd - 0.88) * 4.0;
-            colorized = mix(colorized, vec3(1.0), flash * 0.5);
-
-            finalColor = clamp(colorized, 0.0, 1.0);
-        } else if (u_filterType == FILTER_VHS) {
-            // VHS — variables prefijadas con vhs_ para evitar colisión de scope
-            vec2 vhs_uv = texCoord;
-            vec2 vhs_lowRes = vec2(320.0, 240.0);
-            vec2 vhs_pix = (floor(vhs_uv * vhs_lowRes) + 0.5) / vhs_lowRes;
-
-            // Scanlines entrelazadas
-            float vhs_scan = mod(floor(vhs_uv.y * u_resolution.y), 2.0);
-            float vhs_scanF = 1.0 - vhs_scan * 0.18;
-
-            // Chroma displacement: R+2px, B-2px
-            float vhs_cs = 2.0 / u_resolution.x;
-            float vhs_r = texture2D(u_image, vec2(vhs_pix.x + vhs_cs, vhs_pix.y)).r;
-            float vhs_g = texture2D(u_image, vhs_pix).g;
-            float vhs_b = texture2D(u_image, vec2(vhs_pix.x - vhs_cs, vhs_pix.y)).b;
-            vec3 vhs_c = vec3(vhs_r, vhs_g, vhs_b);
-
-            // Luminance noise en zonas oscuras
-            float vhs_lum = dot(vhs_c, vec3(0.299, 0.587, 0.114));
-            float vhs_grain = random(vhs_uv + vec2(u_time * 0.017, u_time * 0.031)) * 0.12;
-            float vhs_dark = smoothstep(0.5, 0.0, vhs_lum);
-            vhs_c += vhs_grain * vhs_dark;
-
-            // Tape jitter intermitente
-            float vhs_jt = floor(u_time * 15.0);
-            float vhs_js = random(vec2(floor(vhs_uv.y * u_resolution.y * 0.25), vhs_jt));
-            float vhs_ja = step(0.92, vhs_js);
-            float vhs_jamt = (random(vec2(vhs_js, vhs_jt * 0.1)) - 0.5) * 0.03;
-            vec2 vhs_juv = clamp(vec2(vhs_pix.x + vhs_jamt * vhs_ja, vhs_pix.y), 0.0, 1.0);
-            vec3 vhs_jc = vec3(
-                texture2D(u_image, vec2(vhs_juv.x + vhs_cs, vhs_juv.y)).r,
-                texture2D(u_image, vhs_juv).g,
-                texture2D(u_image, vec2(vhs_juv.x - vhs_cs, vhs_juv.y)).b
+            vec2 uv  = texCoord;
+            float jt = floor(u_time * 12.0);
+            float jr  = random(vec2(jt*0.017, jt*0.031));
+            float jr2 = random(vec2(jt*0.053, jt*0.072));
+            float jx = 0.0, jy = 0.0;
+            if (jr > 0.75) { jx = (jr-0.75)*0.18*sign(jr2-0.5); jy = (jr2-0.5)*0.06; }
+            uv = fract(uv + vec2(jx, jy));
+            float fz  = smoothstep(0.08,0.14,uv.y)*(1.0-smoothstep(0.50,0.56,uv.y));
+            float fzx = smoothstep(0.20,0.30,uv.x)*(1.0-smoothstep(0.70,0.80,uv.x));
+            float fm  = fz * fzx;
+            float fby = floor(uv.y*80.0)/80.0;
+            float fg  = random(vec2(fby*3.1, floor(u_time*20.0)*0.7));
+            float fs  = (fg > 0.70 && fm > 0.3) ? (fg-0.70)*0.35 : 0.0;
+            uv.x = fract(uv.x + sin(uv.y*60.0+u_time*18.0)*0.025*fm + fs);
+            uv.y = fract(uv.y + cos(uv.x*45.0+u_time*14.0)*0.018*fm);
+            float by  = floor(uv.y*40.0)/40.0;
+            float gs  = random(vec2(by, floor(u_time*12.0)));
+            float gs2 = random(vec2(by+0.3, floor(u_time*8.0)));
+            if (gs > 0.65) uv.x = fract(uv.x + (gs-0.65)*1.2);
+            float ab = 0.018 + gs2*0.025 + abs(jx)*0.3;
+            vec3 aber = vec3(
+                texture2D(u_image, vec2(uv.x+ab, uv.y)).r,
+                texture2D(u_image, uv).g,
+                texture2D(u_image, vec2(uv.x-ab, uv.y)).b
             );
-            vhs_c = mix(vhs_c, vhs_jc, vhs_ja);
-            finalColor = clamp(vhs_c * vhs_scanF, 0.0, 1.0);
+            float lum  = brightness(aber);
+            float wave = sin(uv.y*18.0+u_time*5.0)*0.5+0.5;
+            vec3 pal   = mix(vec3(1.0,0.05,0.75), vec3(0.0,1.0,0.2), wave);
+            vec3 col   = mix(aber*0.3, pal, smoothstep(0.2,0.8,lum));
+            float sln  = mod(floor(uv.y*u_resolution.y), 3.0);
+            float ns   = random(vec2(uv.x*100.0, floor(u_time*20.0)+uv.y*50.0));
+            if (sln == 0.0 && ns > 0.6) col = mix(col, pal.brg, 0.8);
+            float flash = (jr > 0.88) ? (jr-0.88)*4.0 : 0.0;
+            finalColor  = clamp(mix(col, vec3(1.0), flash*0.5), 0.0, 1.0);
 
-        } else if (u_filterType == FILTER_GLITCH3) {
-            // Glitch3 — Hydra-style, variables prefijadas con g3_
-            vec2 g3_uv = texCoord;
-
-            // o0: osc(18,0.1).color(2,0.1,2).mult(osc(20,0.01)).repeat(2,20).rotate(0.5)
-            float g3_cosA = cos(0.5);
-            float g3_sinA = sin(0.5);
-            vec2 g3_r0 = g3_uv - 0.5;
-            g3_r0 = vec2(g3_cosA*g3_r0.x - g3_sinA*g3_r0.y, g3_sinA*g3_r0.x + g3_cosA*g3_r0.y) + 0.5;
-            vec2 g3_rep = fract(g3_r0 * vec2(2.0, 20.0));
-
-            // modulate con video como proxy de o1
-            vec4 g3_mod = texture2D(u_image, g3_uv);
-            vec2 g3_m = fract(g3_rep + g3_mod.rg * 0.08);
-
-            // scale vertical dinámica (simula fft[0])
-            float g3_sy = sin(u_time * 1.3) * 0.45 + 2.0;
-            vec2 g3_sc = vec2(g3_m.x, (g3_m.y - 0.5) / g3_sy + 0.5);
-
-            float g3_o0a = sin(g3_sc.x * 18.0 + u_time * 0.1) * 0.5 + 0.5;
-            float g3_o0b = sin(g3_r0.x * 20.0 + u_time * 0.01) * 0.5 + 0.5;
-            vec3 g3_o0 = vec3(g3_o0a*2.0, g3_o0a*0.1, g3_o0a*2.0) * g3_o0b;
-
-            // o1: osc(20,0.2).color(2,0.7,0.1).mult(osc(40)).modulateRotate(o0,0.2).rotate(0.2)
-            float g3_o0lum = dot(g3_o0, vec3(0.299, 0.587, 0.114));
-            float g3_rot = g3_o0lum * 0.2;
-            float g3_cR = cos(g3_rot); float g3_sR = sin(g3_rot);
-            float g3_cA1 = cos(0.2 + u_time * 0.05); float g3_sA1 = sin(0.2 + u_time * 0.05);
-            vec2 g3_r1 = g3_uv - 0.5;
-            g3_r1 = vec2(g3_cR*g3_r1.x - g3_sR*g3_r1.y, g3_sR*g3_r1.x + g3_cR*g3_r1.y);
-            g3_r1 = vec2(g3_cA1*g3_r1.x - g3_sA1*g3_r1.y, g3_sA1*g3_r1.x + g3_cA1*g3_r1.y) + 0.5;
-            float g3_o1a = sin(g3_r1.x * 20.0 + u_time * 0.2) * 0.5 + 0.5;
-            float g3_o1b = sin(g3_r1.x * 40.0 + u_time * 0.3) * 0.5 + 0.5;
-            vec3 g3_o1 = vec3(g3_o1a*2.0, g3_o1a*0.7, g3_o1a*0.1) * g3_o1b;
-
-            // diff(o1) mezclado con cámara
-            vec3 g3_diff = abs(g3_o0 - g3_o1);
-            vec4 g3_cam = texture2D(u_image, g3_uv);
-            finalColor = clamp(mix(g3_cam.rgb, g3_diff, 0.72), 0.0, 1.0);
+        } else if (u_filterType == FILTER_VHS) {
+            vec2 vhs_uv  = texCoord;
+            vec2 vhs_pix = (floor(vhs_uv * vec2(320.0,240.0)) + 0.5) / vec2(320.0,240.0);
+            float vhs_sl = mod(floor(vhs_uv.y * u_resolution.y), 2.0);
+            float vhs_sf = 1.0 - vhs_sl * 0.18;
+            float vhs_cs = 2.0 / u_resolution.x;
+            vec3 vhs_c   = vec3(
+                texture2D(u_image, vec2(vhs_pix.x+vhs_cs, vhs_pix.y)).r,
+                texture2D(u_image, vhs_pix).g,
+                texture2D(u_image, vec2(vhs_pix.x-vhs_cs, vhs_pix.y)).b
+            );
+            float vhs_lum   = dot(vhs_c, vec3(0.299,0.587,0.114));
+            float vhs_grain = random(vhs_uv + vec2(u_time*0.017, u_time*0.031)) * 0.12;
+            vhs_c += vhs_grain * smoothstep(0.5, 0.0, vhs_lum);
+            float vhs_jt   = floor(u_time * 15.0);
+            float vhs_js   = random(vec2(floor(vhs_uv.y*u_resolution.y*0.25), vhs_jt));
+            float vhs_ja   = step(0.92, vhs_js);
+            float vhs_jamt = (random(vec2(vhs_js, vhs_jt*0.1)) - 0.5) * 0.03;
+            vec2  vhs_juv  = clamp(vec2(vhs_pix.x+vhs_jamt*vhs_ja, vhs_pix.y), 0.0, 1.0);
+            vec3  vhs_jc   = vec3(
+                texture2D(u_image, vec2(vhs_juv.x+vhs_cs, vhs_juv.y)).r,
+                texture2D(u_image, vhs_juv).g,
+                texture2D(u_image, vec2(vhs_juv.x-vhs_cs, vhs_juv.y)).b
+            );
+            finalColor = clamp(mix(vhs_c, vhs_jc, vhs_ja) * vhs_sf, 0.0, 1.0);
         }
 
         gl_FragColor = vec4(finalColor, alpha);
     }
 `;
 
-// Helper para compilar un shader
+// --- INIT WEBGL ---
 function compileShader(gl, source, type) {
     const shader = gl.createShader(type);
     gl.shaderSource(shader, source);
     gl.compileShader(shader);
-
     if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
-        console.error('Error al compilar el shader:', gl.getShaderInfoLog(shader));
+        console.error('Shader error:', gl.getShaderInfoLog(shader));
         gl.deleteShader(shader);
         return null;
     }
     return shader;
 }
 
-// Helper para enlazar shaders a un programa
-function createProgram(gl, vertexShader, fragmentShader) {
-    const program = gl.createProgram();
-    gl.attachShader(program, vertexShader);
-    gl.attachShader(program, fragmentShader);
-    gl.linkProgram(program);
-
-    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
-        console.error('Error al enlazar el programa:', gl.getProgramInfoLog(program));
-        gl.deleteProgram(program);
+function createProgram(gl, vs, fs) {
+    const prog = gl.createProgram();
+    gl.attachShader(prog, vs);
+    gl.attachShader(prog, fs);
+    gl.linkProgram(prog);
+    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+        console.error('Program error:', gl.getProgramInfoLog(prog));
+        gl.deleteProgram(prog);
         return null;
     }
-    return program;
+    return prog;
 }
 
-// CORRECCIÓN DE CÁMARA: el espejo se controla via uniform u_flipX según facingMode
-function setupQuadBuffers(gl) {
-    const positions = new Float32Array([
-        -1, -1,
-         1, -1,
-        -1,  1,
-        -1,  1,
-         1, -1,
-         1,  1,
-    ]);
-    positionBuffer = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
-    gl.bufferData(gl.ARRAY_BUFFER, positions, gl.STATIC_DRAW);
-
-    const texCoords = new Float32Array([
-        0, 1,
-        1, 1,
-        0, 0,
-        0, 0,
-        1, 1,
-        1, 0,
-    ]);
-    texCoordBuffer = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, texCoordBuffer);
-    gl.bufferData(gl.ARRAY_BUFFER, texCoords, gl.STATIC_DRAW);
-}
-
-// Inicializa las texturas
-function setupTextures(gl) {
-    // Textura para el video original (para filtros WebGL)
-    videoTexture = gl.createTexture();
-    gl.bindTexture(gl.TEXTURE_2D, videoTexture);
+function setupTexture(gl) {
+    const tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, tex);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-
-    // Textura para el output de MediaPipe (dibujado en el canvas 2D auxiliar)
-    mpOutputTexture = gl.createTexture();
-    gl.bindTexture(gl.TEXTURE_2D, mpOutputTexture);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    return tex;
 }
 
-// --- FUNCIÓN DE INICIALIZACIÓN WEBG L ---
 function initWebGL() {
-    gl = glcanvas.getContext('webgl', { preserveDrawingBuffer: true }); 
-    if (!gl) {
-        alert('Tu navegador no soporta WebGL. No se podrán aplicar filtros avanzados.');
-        console.error('WebGL no soportado.');
-        return;
-    }
-    console.log('Contexto WebGL obtenido.');
+    gl = glcanvas.getContext('webgl', { preserveDrawingBuffer: true });
+    if (!gl) { alert('Tu navegador no soporta WebGL.'); return; }
 
-    const vertexShader = compileShader(gl, vsSource, gl.VERTEX_SHADER);
-    const fragmentShader = compileShader(gl, fsSource, gl.FRAGMENT_SHADER);
-    program = createProgram(gl, vertexShader, fragmentShader);
+    program = createProgram(gl,
+        compileShader(gl, vsSource, gl.VERTEX_SHADER),
+        compileShader(gl, fsSource, gl.FRAGMENT_SHADER)
+    );
     gl.useProgram(program);
 
-    program.positionLocation = gl.getAttribLocation(program, 'a_position');
-    program.texCoordLocation = gl.getAttribLocation(program, 'a_texCoord');
-    program.imageLocation = gl.getUniformLocation(program, 'u_image');
-    filterTypeLocation = gl.getUniformLocation(program, 'u_filterType');
-    program.resolutionLocation = gl.getUniformLocation(program, 'u_resolution');
-    timeLocation = gl.getUniformLocation(program, 'u_time');
-    colorShiftUniformLocation = gl.getUniformLocation(program, 'u_colorShift');
+    program.positionLocation    = gl.getAttribLocation(program, 'a_position');
+    program.texCoordLocation    = gl.getAttribLocation(program, 'a_texCoord');
+    program.imageLocation       = gl.getUniformLocation(program, 'u_image');
+    program.resolutionLocation  = gl.getUniformLocation(program, 'u_resolution');
     program.aspectRatioLocation = gl.getUniformLocation(program, 'u_aspectRatio');
-    flipXLocation = gl.getUniformLocation(program, 'u_flipX');
-
-    bassAmpUniformLocation = gl.getUniformLocation(program, 'u_bassAmp');
-    midAmpUniformLocation = gl.getUniformLocation(program, 'u_midAmp');
-    highAmpUniformLocation = gl.getUniformLocation(program, 'u_highAmp');
+    filterTypeLocation          = gl.getUniformLocation(program, 'u_filterType');
+    timeLocation                = gl.getUniformLocation(program, 'u_time');
+    colorShiftUniformLocation   = gl.getUniformLocation(program, 'u_colorShift');
+    flipXLocation               = gl.getUniformLocation(program, 'u_flipX');
+    bassAmpUniformLocation      = gl.getUniformLocation(program, 'u_bassAmp');
+    midAmpUniformLocation       = gl.getUniformLocation(program, 'u_midAmp');
+    highAmpUniformLocation      = gl.getUniformLocation(program, 'u_highAmp');
 
     gl.enableVertexAttribArray(program.positionLocation);
     gl.enableVertexAttribArray(program.texCoordLocation);
 
-    setupQuadBuffers(gl); // Llama a la función con la corrección de espejo
-    setupTextures(gl); 
+    positionBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1,1,-1,-1,1,-1,1,1,-1,1,1]), gl.STATIC_DRAW);
+
+    texCoordBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, texCoordBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([0,1,1,1,0,0,0,0,1,1,1,0]), gl.STATIC_DRAW);
 
     gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
     gl.vertexAttribPointer(program.positionLocation, 2, gl.FLOAT, false, 0, 0);
-
     gl.bindBuffer(gl.ARRAY_BUFFER, texCoordBuffer);
     gl.vertexAttribPointer(program.texCoordLocation, 2, gl.FLOAT, false, 0, 0);
 
-    gl.uniform1i(program.imageLocation, 0); 
+    videoTexture    = setupTexture(gl);
+    mpOutputTexture = setupTexture(gl);
 
+    gl.uniform1i(program.imageLocation, 0);
     gl.uniform1i(filterTypeLocation, 0);
-    console.log('WebGL inicialización completa.');
+    gl.clearColor(0, 0, 0, 1);
 }
 
-// --- FUNCIÓN DE INICIALIZACIÓN MEDIAPIPE ---
+// --- MEDIAPIPE ---
 function initMediaPipe() {
     selfieSegmentation = new SelfieSegmentation({
         locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/${file}`,
     });
-
-    // 0 para modelos generales (rápido), 1 para modelos más grandes (más precisos para segmentación humana)
-    selfieSegmentation.setOptions({
-        modelSelection: 1, 
+    selfieSegmentation.setOptions({ modelSelection: 1 });
+    selfieSegmentation.onResults((results) => {
+        mpResults    = results;
+        mpProcessing = false;
     });
-
-    selfieSegmentation.onResults(onMediaPipeResults);
-    console.log('MediaPipe SelfieSegmentation inicializado.');
 }
 
-// Callback de MediaPipe: se llama cuando MediaPipe ha procesado un fotograma
-function onMediaPipeResults(results) {
-    mpResults = results; // Almacenar los resultados
-    mpProcessing = false; // Permitir el siguiente envío de fotogramas
-}
-
-// --- LÓGICA DE CÁMARA Y STREAMING ---
-let availableCameraDevices = [];
-
-async function listCameras() {
-  try {
-    await navigator.mediaDevices.getUserMedia({ video: true, audio: false })
-        .then(stream => {
-            stream.getTracks().forEach(track => track.stop());
-        })
-        .catch(err => {
-            console.warn('listCameras: Error al obtener permisos de cámara (puede ser ignorado si el usuario deniega):', err);
-        });
-
-    const devices = await navigator.mediaDevices.enumerateDevices();
-    const videoDevices = devices.filter(device => device.kind === 'videoinput');
-
-    availableCameraDevices = videoDevices;
-    
-    if (availableCameraDevices.length > 0) {
-      if (!currentCameraDeviceId || !availableCameraDevices.some(d => d.deviceId === currentCameraDeviceId)) {
-        currentCameraDeviceId = availableCameraDevices[0].deviceId;
-      }
-      startCamera(currentCameraDeviceId);
-    } else {
-      alert('No se encontraron dispositivos de cámara.');
+function syncTempCanvases(w, h) {
+    if (tempCanvasA.width !== w || tempCanvasA.height !== h) {
+        tempCanvasA.width = w;  tempCanvasA.height = h;
+        tempCanvasB.width = w;  tempCanvasB.height = h;
     }
-  } catch (err) {
-    console.error('listCameras: Error al listar dispositivos de cámara:', err);
-    alert('Error al listar dispositivos de cámara. Revisa los permisos.');
-  }
+}
+
+// --- CÁMARA ---
+async function listCameras() {
+    try {
+        const perm = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+        perm.getTracks().forEach(t => t.stop());
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        availableCameraDevices = devices.filter(d => d.kind === 'videoinput');
+        if (availableCameraDevices.length > 0) {
+            currentCameraDeviceId = availableCameraDevices[0].deviceId;
+            startCamera(currentCameraDeviceId);
+        } else {
+            alert('No se encontraron dispositivos de cámara.');
+        }
+    } catch (err) {
+        console.error('Error listando cámaras:', err);
+        alert('Error al acceder a la cámara. Revisa los permisos.');
+    }
 }
 
 async function startCamera(deviceId) {
-  if (currentStream) {
-    currentStream.getTracks().forEach(track => track.stop());
-  }
-
-  const constraints = {
-    video: {
-      deviceId: deviceId ? { exact: deviceId } : undefined,
-      width: { ideal: 1280 },
-      height: { ideal: 720 }
-    },
-    audio: true
-  };
-
-  try {
-    currentStream = await navigator.mediaDevices.getUserMedia(constraints);
-    video.srcObject = currentStream;
-    
-    const videoTrack = currentStream.getVideoTracks()[0];
-    const settings = videoTrack.getSettings();
-    currentCameraDeviceId = settings.deviceId;
-    currentFacingMode = settings.facingMode || 'unknown';
-
-    // --- Web Audio API setup ---
-    if (currentStream.getAudioTracks().length > 0) {
-        if (!audioContext) {
-            audioContext = new (window.AudioContext || window.webkitAudioContext)();
-            analyser = audioContext.createAnalyser();
-            analyser.fftSize = 256;
-            analyser.smoothingTimeConstant = 0.7;
-            dataArray = new Uint8Array(analyser.frequencyBinCount);
-        }
-
-        if (microphone) {
-            microphone.disconnect();
-        }
-
-        const audioSource = audioContext.createMediaStreamSource(currentStream);
-        audioSource.connect(analyser);
-        microphone = audioSource;
-    } else {
-        if (microphone) {
-            microphone.disconnect();
-            microphone = null;
-        }
-        if (analyser) {
-            analyser.disconnect();
-            analyser = null;
-        }
-    }
-    // --- Fin Web Audio API setup ---
-
-    video.onloadedmetadata = () => {
-      video.play();
-      if (glcanvas.width !== video.videoWidth || glcanvas.height !== video.videoHeight) {
-        glcanvas.width = video.videoWidth;
-        glcanvas.height = video.videoHeight;
-        canvas.width = video.videoWidth; // Ajustar también el canvas 2D
-        canvas.height = video.videoHeight; // Ajustar también el canvas 2D
-        if (gl) {
-          gl.viewport(0, 0, glcanvas.width, glcanvas.height);
-          gl.uniform1f(program.aspectRatioLocation, glcanvas.width / glcanvas.height);
-        }
-      }
-      if (!gl) {
-        initWebGL();
-      }
-      // Inicializar MediaPipe y Camera si no están ya inicializados
-      if (!selfieSegmentation) {
-        initMediaPipe();
-      }
-      if (!mpCamera) {
-        mpCamera = new Camera(video, { // Pasar el elemento de video directamente
-          onFrame: async () => {
-            if (!mpProcessing) { // Solo enviar un nuevo frame si el anterior ha sido procesado
-                mpProcessing = true;
-                await selfieSegmentation.send({ image: video });
-            }
-          },
-          width: video.videoWidth,
-          height: video.videoHeight,
+    if (currentStream) currentStream.getTracks().forEach(t => t.stop());
+    try {
+        currentStream = await navigator.mediaDevices.getUserMedia({
+            video: { deviceId: deviceId ? { exact: deviceId } : undefined, width: { ideal: 1280 }, height: { ideal: 720 } },
+            audio: true
         });
-        mpCamera.start();
-        console.log('MediaPipe Camera inicializada y en marcha.');
-      }
-      drawVideoFrame(); // Iniciar el bucle de renderizado
-    };
-  } catch (err) {
-    console.error('startCamera: No se pudo acceder a la cámara/micrófono:', err);
-    alert('No se pudo acceder a la cámara/micrófono. Revisa los permisos. Error: ' + err.name);
-  }
+        video.srcObject = currentStream;
+
+        const settings = currentStream.getVideoTracks()[0].getSettings();
+        currentCameraDeviceId = settings.deviceId;
+        currentFacingMode     = settings.facingMode || 'unknown';
+
+        // Audio
+        const audioTracks = currentStream.getAudioTracks();
+        if (audioTracks.length > 0) {
+            if (!audioContext) {
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                analyser     = audioContext.createAnalyser();
+                analyser.fftSize = 256;
+                analyser.smoothingTimeConstant = 0.7;
+                dataArray    = new Uint8Array(analyser.frequencyBinCount);
+            }
+            if (microphone) microphone.disconnect();
+            microphone = audioContext.createMediaStreamSource(currentStream);
+            microphone.connect(analyser);
+        } else {
+            if (microphone) { microphone.disconnect(); microphone = null; }
+            if (analyser)   { analyser.disconnect();   analyser   = null; }
+        }
+
+        video.onloadedmetadata = () => {
+            video.play();
+            const w = video.videoWidth, h = video.videoHeight;
+            if (glcanvas.width !== w || glcanvas.height !== h) {
+                glcanvas.width = w;  glcanvas.height = h;
+                canvas.width   = w;  canvas.height   = h;
+                syncTempCanvases(w, h);
+                if (gl) {
+                    gl.viewport(0, 0, w, h);
+                    gl.uniform2f(program.resolutionLocation, w, h);
+                    gl.uniform1f(program.aspectRatioLocation, w / h);
+                }
+            }
+            if (!gl)                initWebGL();
+            if (!selfieSegmentation) initMediaPipe();
+            if (!mpCamera) {
+                mpCamera = new Camera(video, {
+                    onFrame: async () => {
+                        if (!mpProcessing) {
+                            mpProcessing = true;
+                            await selfieSegmentation.send({ image: video });
+                        }
+                    },
+                    width: w, height: h,
+                });
+                mpCamera.start();
+            }
+            drawVideoFrame();
+        };
+    } catch (err) {
+        console.error('startCamera error:', err);
+        alert('No se pudo acceder a la cámara/micrófono. Error: ' + err.name);
+    }
 }
 
-// --- BUCLE PRINCIPAL DE RENDERIZADO WEBG L ---
+// --- BUCLE DE RENDERIZADO ---
+const MP_FILTERS = new Set(['whiteGlow','blackBg','whiteBg','blur','static-silhouette','echo-visual']);
+
+const FILTER_INDEX = {
+    'grayscale':1, 'invert':2, 'sepia':3, 'eco-pink':4, 'weird':5,
+    'glow-outline':6, 'angelical-glitch':7, 'audio-color-shift':8,
+    'modular-color-shift':9, 'kaleidoscope':10, 'mirror':11,
+    'fisheye':12, 'recuerdo':13, 'glitch2':14, 'vhs':15,
+};
+
 function drawVideoFrame() {
     if (!gl || !program || !video.srcObject || video.readyState !== video.HAVE_ENOUGH_DATA) {
         requestAnimationFrame(drawVideoFrame);
         return;
     }
 
-    // --- Detección de nivel de audio (solo si el filtro de audio está seleccionado) ---
+    // Audio color shift
     if (analyser && dataArray && selectedFilter === 'audio-color-shift') {
         analyser.getByteFrequencyData(dataArray);
         let sum = 0;
-        for (let i = 0; i < dataArray.length; i++) {
-            sum += dataArray[i];
-        }
-        let average = sum / dataArray.length;
-        let normalizedLevel = average / 255.0;
-
-        if (normalizedLevel > AUDIO_THRESHOLD) {
-            changePaletteIndex();
+        for (let i = 0; i < dataArray.length; i++) sum += dataArray[i];
+        if ((sum / dataArray.length) / 255 > AUDIO_THRESHOLD) {
+            paletteIndex = (paletteIndex + 1) % palettes.length;
         }
     }
-    // --- Fin detección de nivel de nivel de audio ---
 
-    gl.clearColor(0.0, 0.0, 0.0, 1.0);
     gl.clear(gl.COLOR_BUFFER_BIT);
-    gl.useProgram(program);
+    gl.uniform1f(timeLocation, performance.now() / 1000.0);
 
-    gl.uniform2f(program.resolutionLocation, glcanvas.width, glcanvas.height);
-    gl.uniform1f(program.aspectRatioLocation, glcanvas.width / glcanvas.height);
-    const currentTime = performance.now() / 1000.0;
-    gl.uniform1f(timeLocation, currentTime);
-
-    // Cámara frontal: espejo horizontal para imagen natural. Trasera: sin espejo.
     const isFront = (currentFacingMode === 'user' || currentFacingMode === 'unknown');
-    gl.uniform1f(flipXLocation, isFront ? -1.0 : 1.0);
+    const isMP    = MP_FILTERS.has(selectedFilter);
 
-    // Los filtros eliminados se quitan de la lista de MediaPipe
-    const isMediaPipeFilter = ['whiteGlow', 'blackBg', 'whiteBg', 'blur', 'static-silhouette', 'echo-visual'].includes(selectedFilter);
+    // Filtros WebGL: GPU maneja el espejo. Filtros MediaPipe: canvas 2D maneja el espejo, GPU no.
+    gl.uniform1f(flipXLocation, (!isMP && isFront) ? -1.0 : 1.0);
 
-    if (isMediaPipeFilter && mpResults && mpResults.segmentationMask && mpResults.image) {
-        // Renderizar con MediaPipe en el canvas 2D auxiliar
+    if (isMP && mpResults && mpResults.segmentationMask && mpResults.image) {
+        const w = canvas.width, h = canvas.height;
+        syncTempCanvases(w, h);
 
-        // Espejo horizontal para cámara frontal en el canvas 2D
         mpCanvasCtx.save();
         if (isFront) {
-            mpCanvasCtx.translate(canvas.width, 0);
+            mpCanvasCtx.translate(w, 0);
             mpCanvasCtx.scale(-1, 1);
         }
-
-        let postProcessFilterIndex = 0; // Por defecto: FILTER_NONE
+        mpCanvasCtx.clearRect(0, 0, w, h);
 
         switch (selectedFilter) {
-            case "whiteGlow": { // Silueta Roja: fondo real + silueta rellena de rojo
-                mpCanvasCtx.clearRect(0, 0, canvas.width, canvas.height);
-
-                // 1. Dibujar el fondo del video (imagen completa)
-                mpCanvasCtx.drawImage(mpResults.image, 0, 0, canvas.width, canvas.height);
-
-                // 2. Pintar la silueta de la persona en rojo sólido usando la máscara como clip
-                const tempCanvas = document.createElement('canvas');
-                tempCanvas.width = canvas.width;
-                tempCanvas.height = canvas.height;
-                const tempCtx = tempCanvas.getContext('2d');
-                tempCtx.fillStyle = "red";
-                tempCtx.fillRect(0, 0, tempCanvas.width, tempCanvas.height);
-                tempCtx.globalCompositeOperation = "destination-in";
-                tempCtx.drawImage(mpResults.segmentationMask, 0, 0, tempCanvas.width, tempCanvas.height);
-                mpCanvasCtx.drawImage(tempCanvas, 0, 0);
+            case 'whiteGlow': {
+                mpCanvasCtx.drawImage(mpResults.image, 0, 0, w, h);
+                tempCtxA.clearRect(0, 0, w, h);
+                tempCtxA.fillStyle = 'red';
+                tempCtxA.fillRect(0, 0, w, h);
+                tempCtxA.globalCompositeOperation = 'destination-in';
+                tempCtxA.drawImage(mpResults.segmentationMask, 0, 0, w, h);
+                tempCtxA.globalCompositeOperation = 'source-over';
+                mpCanvasCtx.drawImage(tempCanvasA, 0, 0);
                 break;
             }
-
-            case "blackBg": // Silueta Negra: fondo real + silueta rellena de negro
-            case "whiteBg": { // Silueta Blanca: fondo real + silueta rellena de blanco
-                mpCanvasCtx.clearRect(0, 0, canvas.width, canvas.height);
-
-                // 1. Dibujar el fondo del video (imagen completa)
-                mpCanvasCtx.drawImage(mpResults.image, 0, 0, canvas.width, canvas.height);
-
-                // 2. Pintar la silueta con el color sólido usando la máscara como clip
-                const tempCanvasBW = document.createElement('canvas');
-                tempCanvasBW.width = canvas.width;
-                tempCanvasBW.height = canvas.height;
-                const tempCtxBW = tempCanvasBW.getContext('2d');
-                tempCtxBW.fillStyle = selectedFilter === "blackBg" ? "black" : "white";
-                tempCtxBW.fillRect(0, 0, tempCanvasBW.width, tempCanvasBW.height);
-                tempCtxBW.globalCompositeOperation = "destination-in";
-                tempCtxBW.drawImage(mpResults.segmentationMask, 0, 0, tempCanvasBW.width, tempCanvasBW.height);
-                mpCanvasCtx.drawImage(tempCanvasBW, 0, 0);
+            case 'blackBg':
+            case 'whiteBg': {
+                mpCanvasCtx.drawImage(mpResults.image, 0, 0, w, h);
+                tempCtxA.clearRect(0, 0, w, h);
+                tempCtxA.fillStyle = selectedFilter === 'blackBg' ? 'black' : 'white';
+                tempCtxA.fillRect(0, 0, w, h);
+                tempCtxA.globalCompositeOperation = 'destination-in';
+                tempCtxA.drawImage(mpResults.segmentationMask, 0, 0, w, h);
+                tempCtxA.globalCompositeOperation = 'source-over';
+                mpCanvasCtx.drawImage(tempCanvasA, 0, 0);
                 break;
             }
-
-            case "blur": { // Blur: camufla la silueta con el entorno difuminado
-                mpCanvasCtx.clearRect(0, 0, canvas.width, canvas.height);
-
-                // 1. Dibujar la imagen completa del video
-                mpCanvasCtx.drawImage(mpResults.image, 0, 0, canvas.width, canvas.height);
-
-                // 2. Crear una versión difuminada del video para usarla como "fondo reconstruido"
-                const bgCanvas = document.createElement('canvas');
-                bgCanvas.width = canvas.width;
-                bgCanvas.height = canvas.height;
-                const bgCtx = bgCanvas.getContext('2d');
-                bgCtx.filter = "blur(18px)";
-                bgCtx.drawImage(mpResults.image, -30, -30, canvas.width + 60, canvas.height + 60);
-                bgCtx.filter = "none";
-
-                // 3. Recortar ese fondo difuminado a la silueta de la persona
-                bgCtx.globalCompositeOperation = "destination-in";
-                bgCtx.drawImage(mpResults.segmentationMask, 0, 0, bgCanvas.width, bgCanvas.height);
-
-                // 4. Superponer el fondo difuminado recortado sobre la imagen (camufla a la persona)
-                mpCanvasCtx.drawImage(bgCanvas, 0, 0);
+            case 'blur': {
+                mpCanvasCtx.drawImage(mpResults.image, 0, 0, w, h);
+                tempCtxA.clearRect(0, 0, w, h);
+                tempCtxA.filter = 'blur(18px)';
+                tempCtxA.drawImage(mpResults.image, -30, -30, w+60, h+60);
+                tempCtxA.filter = 'none';
+                tempCtxA.globalCompositeOperation = 'destination-in';
+                tempCtxA.drawImage(mpResults.segmentationMask, 0, 0, w, h);
+                tempCtxA.globalCompositeOperation = 'source-over';
+                mpCanvasCtx.drawImage(tempCanvasA, 0, 0);
                 break;
             }
-
-            case "static-silhouette": { // Silueta estática: fondo real + silueta rellena de ruido TV
-                mpCanvasCtx.clearRect(0, 0, canvas.width, canvas.height);
-
-                // 1. Dibujar el fondo del video
-                mpCanvasCtx.drawImage(mpResults.image, 0, 0, canvas.width, canvas.height);
-
-                // 2. Generar ruido tipo televisor en un canvas temporal
-                const noiseCanvas = document.createElement('canvas');
-                noiseCanvas.width = canvas.width;
-                noiseCanvas.height = canvas.height;
-                const noiseCtx = noiseCanvas.getContext('2d');
-                const imageData = noiseCtx.createImageData(noiseCanvas.width, noiseCanvas.height);
-                const data = imageData.data;
-                for (let i = 0; i < data.length; i += 4) {
-                    const v = Math.random() * 255;
-                    data[i]     = v;
-                    data[i + 1] = v;
-                    data[i + 2] = v;
-                    data[i + 3] = 255;
+            case 'static-silhouette': {
+                mpCanvasCtx.drawImage(mpResults.image, 0, 0, w, h);
+                const imgData = tempCtxA.createImageData(w, h);
+                const d = imgData.data;
+                for (let i = 0; i < d.length; i += 4) {
+                    const v = Math.random() * 255 | 0;
+                    d[i] = d[i+1] = d[i+2] = v; d[i+3] = 255;
                 }
-                noiseCtx.putImageData(imageData, 0, 0);
-
-                // 3. Recortar el ruido a la silueta de la persona
-                noiseCtx.globalCompositeOperation = "destination-in";
-                noiseCtx.drawImage(mpResults.segmentationMask, 0, 0, noiseCanvas.width, noiseCanvas.height);
-
-                // 4. Dibujar el ruido recortado sobre el fondo
-                mpCanvasCtx.drawImage(noiseCanvas, 0, 0);
+                tempCtxA.putImageData(imgData, 0, 0);
+                tempCtxA.globalCompositeOperation = 'destination-in';
+                tempCtxA.drawImage(mpResults.segmentationMask, 0, 0, w, h);
+                tempCtxA.globalCompositeOperation = 'source-over';
+                mpCanvasCtx.drawImage(tempCanvasA, 0, 0);
                 break;
             }
-
-            case "echo-visual": { // Eco visual: siluetas repetidas desplazadas detrás de la persona
-                mpCanvasCtx.clearRect(0, 0, canvas.width, canvas.height);
-
-                // 1. Dibujar el fondo del video
-                mpCanvasCtx.drawImage(mpResults.image, 0, 0, canvas.width, canvas.height);
-
-                // 2. Silueta base negra sólida recortada por la máscara
-                const ecoBase = document.createElement('canvas');
-                ecoBase.width = canvas.width;
-                ecoBase.height = canvas.height;
-                const ecoCtx = ecoBase.getContext('2d');
-                ecoCtx.fillStyle = "rgb(10, 10, 10)";
-                ecoCtx.fillRect(0, 0, ecoBase.width, ecoBase.height);
-                ecoCtx.globalCompositeOperation = "destination-in";
-                ecoCtx.drawImage(mpResults.segmentationMask, 0, 0, ecoBase.width, ecoBase.height);
-
-                // 3. Dibujar 7 ecos desplazados — el más lejano opacidad 0.30, el más cercano 0.80
+            case 'echo-visual': {
+                mpCanvasCtx.drawImage(mpResults.image, 0, 0, w, h);
+                tempCtxA.clearRect(0, 0, w, h);
+                tempCtxA.fillStyle = 'rgb(10,10,10)';
+                tempCtxA.fillRect(0, 0, w, h);
+                tempCtxA.globalCompositeOperation = 'destination-in';
+                tempCtxA.drawImage(mpResults.segmentationMask, 0, 0, w, h);
+                tempCtxA.globalCompositeOperation = 'source-over';
                 const echoCount = 7;
-                const stepX = 22;
-                const stepY = 6;
                 for (let i = echoCount; i >= 1; i--) {
-                    const alpha = 0.30 + (0.50 * (echoCount - i) / (echoCount - 1));
-                    mpCanvasCtx.globalAlpha = alpha;
-                    mpCanvasCtx.drawImage(ecoBase, stepX * i, stepY * i);
+                    mpCanvasCtx.globalAlpha = 0.30 + 0.50 * (echoCount - i) / (echoCount - 1);
+                    mpCanvasCtx.drawImage(tempCanvasA, 22*i, 6*i);
                 }
-
-                // 4. Figura real de la persona recortada encima, nítida
                 mpCanvasCtx.globalAlpha = 1.0;
-                const personCanvas = document.createElement('canvas');
-                personCanvas.width = canvas.width;
-                personCanvas.height = canvas.height;
-                const personCtx = personCanvas.getContext('2d');
-                personCtx.drawImage(mpResults.image, 0, 0, personCanvas.width, personCanvas.height);
-                personCtx.globalCompositeOperation = "destination-in";
-                personCtx.drawImage(mpResults.segmentationMask, 0, 0, personCanvas.width, personCanvas.height);
-                mpCanvasCtx.drawImage(personCanvas, 0, 0);
+                tempCtxB.clearRect(0, 0, w, h);
+                tempCtxB.drawImage(mpResults.image, 0, 0, w, h);
+                tempCtxB.globalCompositeOperation = 'destination-in';
+                tempCtxB.drawImage(mpResults.segmentationMask, 0, 0, w, h);
+                tempCtxB.globalCompositeOperation = 'source-over';
+                mpCanvasCtx.drawImage(tempCanvasB, 0, 0);
                 break;
             }
         }
-        mpCanvasCtx.globalCompositeOperation = "source-over"; // Resetear para futuros dibujos
-        mpCanvasCtx.restore(); // Cierra el save del espejo
 
-        // Actualizar la textura WebGL con el contenido del canvas 2D de MediaPipe
+        mpCanvasCtx.globalAlpha = 1.0;
+        mpCanvasCtx.globalCompositeOperation = 'source-over';
+        mpCanvasCtx.restore();
+
         gl.activeTexture(gl.TEXTURE0);
         gl.bindTexture(gl.TEXTURE_2D, mpOutputTexture);
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, canvas); // Usa el canvas 2D como fuente
-        gl.uniform1i(filterTypeLocation, postProcessFilterIndex); // Usa el filtro de post-proceso
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, canvas);
+        gl.uniform1i(filterTypeLocation, 0);
+
     } else {
-        // Renderizar con WebGL directamente usando la textura del video
         gl.activeTexture(gl.TEXTURE0);
         gl.bindTexture(gl.TEXTURE_2D, videoTexture);
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video); // Usa el video como fuente
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video);
 
         if (selectedFilter === 'audio-color-shift') {
-            const currentColor = palettes[paletteIndex];
-            gl.uniform3fv(colorShiftUniformLocation, new Float32Array(currentColor));
+            const p = palettes[paletteIndex];
+            colorShiftBuffer[0] = p[0]; colorShiftBuffer[1] = p[1]; colorShiftBuffer[2] = p[2];
+            gl.uniform3fv(colorShiftUniformLocation, colorShiftBuffer);
+        } else if (selectedFilter === 'modular-color-shift') {
+            const t = performance.now() / 1000.0;
+            gl.uniform1f(bassAmpUniformLocation, mapValue(Math.sin(t*0.8), -1,1, 0.0,2.0));
+            gl.uniform1f(midAmpUniformLocation,  mapValue(Math.sin(t*1.2 + Math.PI/3), -1,1, 0.0,1.5));
+            gl.uniform1f(highAmpUniformLocation, mapValue(Math.sin(t*1.5 + Math.PI*2/3), -1,1, 0.0,2.5));
         }
 
-        if (selectedFilter === 'modular-color-shift') {
-            const bassAmp = mapValue(Math.sin(currentTime * 0.8 + 0), -1, 1, 0.0, 2.0);
-            const midAmp = mapValue(Math.sin(currentTime * 1.2 + Math.PI / 3), -1, 1, 0.0, 1.5);
-            const highAmp = mapValue(Math.sin(currentTime * 1.5 + Math.PI * 2 / 3), -1, 1, 0.0, 2.5);
-
-            gl.uniform1f(bassAmpUniformLocation, bassAmp);
-            gl.uniform1f(midAmpUniformLocation, midAmp);
-            gl.uniform1f(highAmpUniformLocation, highAmp);
-        }
-
-        let filterIndex = 0;
-        switch (selectedFilter) {
-            case 'grayscale': filterIndex = 1; break;
-            case 'invert': filterIndex = 2; break;
-            case 'sepia': filterIndex = 3; break;
-            case 'eco-pink': filterIndex = 4; break;
-            case 'weird': filterIndex = 5; break;
-            case 'glow-outline': filterIndex = 6; break;
-            case 'angelical-glitch': filterIndex = 7; break;
-            case 'audio-color-shift': filterIndex = 8; break;
-            case 'modular-color-shift': filterIndex = 9; break;
-            case 'kaleidoscope': filterIndex = 10; break;
-            case 'mirror': filterIndex = 11; break;
-            case 'fisheye': filterIndex = 12; break;
-            case 'recuerdo': filterIndex = 13; break;
-            case 'glitch2': filterIndex = 14; break;
-            case 'vhs': filterIndex = 15; break;
-            case 'glitch3': filterIndex = 16; break;
-            default: filterIndex = 0; break;
-        }
-        gl.uniform1i(filterTypeLocation, filterIndex);
+        gl.uniform1i(filterTypeLocation, FILTER_INDEX[selectedFilter] ?? 0);
     }
 
     gl.drawArrays(gl.TRIANGLES, 0, 6);
     requestAnimationFrame(drawVideoFrame);
 }
 
-function mapValue(value, inMin, inMax, outMin, outMax) {
-    return (value - inMin) * (outMax - outMin) / (inMax - inMin) + outMin;
+function mapValue(v, iMin, iMax, oMin, oMax) {
+    return (v - iMin) * (oMax - oMin) / (iMax - iMin) + oMin;
 }
 
-
-// --- MANEJADORES DE EVENTOS ---
+// --- EVENTOS ---
 captureBtn.addEventListener('click', () => {
-    if (!gl || !glcanvas.width || !glcanvas.height) {
-        console.error('WebGL no está inicializado o el canvas no tiene dimensiones para la captura.');
-        return;
-    }
-
-    let img = new Image();
-    img.src = glcanvas.toDataURL('image/png'); 
-    
-    img.onload = () => {
-        addToGallery(img, 'img');
-    };
-    img.onerror = (e) => {
-        console.error('Error al cargar la imagen para la galería:', e);
-    };
+    if (!gl || !glcanvas.width || !glcanvas.height) return;
+    const img = new Image();
+    img.src = glcanvas.toDataURL('image/png');
+    img.onload = () => addToGallery(img, 'img');
 });
 
-
 recordBtn.addEventListener('click', () => {
-  if (!isRecording) {
+    if (isRecording) return;
     chunks = [];
-    console.log('Iniciando grabación desde glcanvas.captureStream().');
-    let streamToRecord = glcanvas.captureStream(); // Capturar el stream del canvas con los filtros
-    
-    // Si hay audio en el currentStream de la cámara, añadirlo a la grabación
+    const streamToRecord = glcanvas.captureStream();
     const audioTracks = currentStream.getAudioTracks();
-    if (audioTracks.length > 0) {
-        let audioStream = new MediaStream();
-        audioStream.addTrack(audioTracks[0]);
-        streamToRecord.addTrack(audioTracks[0]); // Combina el video del canvas con el audio de la cámara
-    }
-
+    if (audioTracks.length > 0) streamToRecord.addTrack(audioTracks[0]);
     mediaRecorder = new MediaRecorder(streamToRecord, { mimeType: 'video/webm; codecs=vp8' });
-
-    mediaRecorder.ondataavailable = e => {
-      if (e.data.size > 0) chunks.push(e.data);
-      console.log('Datos de video disponibles, tamaño:', e.data.size);
-    };
+    mediaRecorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
     mediaRecorder.onstop = () => {
-      console.log('Grabación detenida. Chunks capturados:', chunks.length);
-      const blob = new Blob(chunks, { type: 'video/webm' });
-      const url = URL.createObjectURL(blob);
-      let vid = document.createElement('video');
-      vid.src = url;
-      vid.controls = true;
-      addToGallery(vid, 'video');
+        const url = URL.createObjectURL(new Blob(chunks, { type: 'video/webm' }));
+        const vid = document.createElement('video');
+        vid.src = url; vid.controls = true;
+        addToGallery(vid, 'video');
     };
     mediaRecorder.start();
     isRecording = true;
     controls.style.display = 'none';
     recordingControls.style.display = 'flex';
-    console.log('Grabación iniciada.');
-  }
 });
 
 pauseBtn.addEventListener('click', () => {
-  if (isPaused) {
-    mediaRecorder.resume();
-    pauseBtn.textContent = 'Pausa'; // Texto de pausa
-    console.log('Grabación reanudada.');
-  } else {
-    mediaRecorder.pause();
-    pauseBtn.textContent = 'Reanudar'; // Texto de reanudar
-    console.log('Grabación pausada.');
-  }
-  isPaused = !isPaused;
+    if (isPaused) { mediaRecorder.resume(); pauseBtn.textContent = 'Pausa'; }
+    else          { mediaRecorder.pause();  pauseBtn.textContent = 'Reanudar'; }
+    isPaused = !isPaused;
 });
 
 stopBtn.addEventListener('click', () => {
-  mediaRecorder.stop();
-  isRecording = false;
-  controls.style.display = 'flex';
-  recordingControls.style.display = 'none';
-  console.log('Grabación finalizada.');
+    mediaRecorder.stop();
+    isRecording = false;
+    controls.style.display = 'flex';
+    recordingControls.style.display = 'none';
 });
 
 filterBtn.addEventListener('click', () => {
-  filtersDropdown.style.display = (filtersDropdown.style.display === 'block') ? 'none' : 'block';
-  console.log('Toggle de dropdown de filtros.');
+    filtersDropdown.style.display = filtersDropdown.style.display === 'block' ? 'none' : 'block';
 });
 
 filterSelect.addEventListener('change', () => {
-  selectedFilter = filterSelect.value;
-  filtersDropdown.style.display = 'none';
-  console.log('Filtro seleccionado manualmente:', selectedFilter);
+    selectedFilter = filterSelect.value;
+    filtersDropdown.style.display = 'none';
 });
 
 fullscreenBtn.addEventListener('click', () => {
-  if (!document.fullscreenElement) {
-    cameraContainer.requestFullscreen();
-    console.log('Solicitando fullscreen.');
-  } else {
-    document.exitFullscreen();
-    console.log('Saliendo de fullscreen.');
-  }
+    if (!document.fullscreenElement) cameraContainer.requestFullscreen();
+    else document.exitFullscreen();
 });
 
+// --- GALERÍA ---
 function addToGallery(element, type) {
-    // 1. Incrementar contador y crear título enumerado
     mediaCounter++;
-    const itemType = type === 'img' ? 'Foto' : 'Video';
-    const itemTitle = `${itemType} ${mediaCounter}`;
+    const itemTitle = `${type === 'img' ? 'Foto' : 'Video'} ${mediaCounter}`;
+    const ext       = type === 'img' ? '.png' : '.webm';
+    const mimeType  = type === 'img' ? 'image/png' : 'video/webm';
+    const fileName  = itemTitle.replace(/\s/g, '_') + ext;
 
-    let container = document.createElement('div');
+    const container = document.createElement('div');
     container.className = 'gallery-item';
-    container.dataset.title = itemTitle; // Añadir el título como data-attribute
+    container.dataset.title = itemTitle;
 
-    // 2. Añadir la etiqueta visual
     const label = document.createElement('div');
-    label.classList.add('gallery-label');
+    label.className = 'gallery-label';
     label.textContent = itemTitle;
-    container.appendChild(label); // Añadir la etiqueta al contenedor
-
+    container.appendChild(label);
     container.appendChild(element);
 
-    // Event listener para abrir la ventana de previsualización al hacer clic
-    element.addEventListener('click', () => {
-        console.log('Creando ventana de previsualización de', type);
-        
-        const previewWindow = document.createElement('div');
-        previewWindow.className = 'preview-window';
-        document.body.appendChild(previewWindow);
+    // Preview al hacer click
+    container.addEventListener('click', () => {
+        const win = document.createElement('div');
+        win.className = 'preview-window';
 
-        const closeButton = document.createElement('span');
-        closeButton.textContent = 'X'; 
-        closeButton.className = 'close-preview-window-button';
-        previewWindow.appendChild(closeButton);
+        const closeBtn = document.createElement('span');
+        closeBtn.className = 'close-preview-window-button';
+        closeBtn.textContent = '✕';
+        win.appendChild(closeBtn);
 
-        const clonedElement = element.cloneNode(true);
-        if (type === 'video') {
-            clonedElement.controls = true; // Mostrar controles para videos
-            clonedElement.play(); // Reproducir al abrir
+        let clone;
+        if (type === 'img') {
+            clone = new Image(); clone.src = element.src;
+        } else {
+            clone = document.createElement('video');
+            clone.src = element.src; clone.controls = true; clone.autoplay = true;
         }
-        previewWindow.appendChild(clonedElement);
+        win.appendChild(clone);
 
-        // --- Botones de acción en la previsualización ---
-        let previewActions = document.createElement('div');
-        previewActions.className = 'preview-actions';
+        const actions = document.createElement('div');
+        actions.className = 'preview-actions';
 
-        let downloadBtn = document.createElement('button');
-        downloadBtn.textContent = 'Descargar'; 
-        downloadBtn.onclick = () => {
-            const a = document.createElement('a');
-            a.href = clonedElement.src;
-            // 3. Usar el título enumerado para el nombre del archivo
-            const extension = type === 'img' ? '.png' : '.webm';
-            a.download = itemTitle.replace(/\s/g, '_') + extension; 
-            a.click();
-            console.log('Descargando desde previsualización', type);
-        };
+        const dlBtn = document.createElement('button');
+        dlBtn.textContent = 'Descargar';
+        dlBtn.onclick = () => { const a = document.createElement('a'); a.href=element.src; a.download=fileName; a.click(); };
+        actions.appendChild(dlBtn);
 
-        let shareBtn = document.createElement('button');
-        shareBtn.textContent = 'Compartir'; 
-        shareBtn.onclick = async () => {
-            if (navigator.share) {
-                try {
-                    const file = await fetch(clonedElement.src).then(res => res.blob());
-                    const fileName = itemTitle.replace(/\s/g, '_') + (type === 'img' ? '.png' : '.webm');
-                    const fileType = type === 'img' ? 'image/png' : 'video/webm';
-                    const shareData = {
-                        files: [new File([file], fileName, { type: fileType })],
-                        title: 'Mi creación desde Experimental Camera',
-                        text: '¡Echa un vistazo a lo que hice con Experimental Camera!'
-                    };
-                    await navigator.share(shareData);
-                    console.log('Contenido compartido exitosamente desde previsualización');
-                } catch (error) {
-                    console.error('Error al compartir desde previsualización:', error);
-                }
-            } else {
-                alert('La API Web Share no es compatible con este navegador.');
-                console.warn('La API Web Share no es compatible.');
-            }
-        };
-
-        let deleteBtn = document.createElement('button');
-        deleteBtn.textContent = 'Eliminar'; 
-        deleteBtn.onclick = () => {
-            if (type === 'video' && clonedElement.src.startsWith('blob:')) {
-                URL.revokeObjectURL(clonedElement.src); // Libera la URL del blob para videos
-            }
-            previewWindow.remove(); // Cierra la ventana de previsualización
-            container.remove(); // Elimina el elemento de la galería
-            console.log('Elemento de galería y previsualización eliminados.');
-        };
-        
-        previewActions.appendChild(downloadBtn);
         if (navigator.share) {
-            previewActions.appendChild(shareBtn);
-        }
-        previewActions.appendChild(deleteBtn);
-        previewWindow.appendChild(previewActions);
-        // --- Fin Botones de acción en la previsualización ---
-
-        // Event listener para cerrar la ventana
-        closeButton.addEventListener('click', () => {
-            if (type === 'video' && clonedElement) {
-                clonedElement.pause();
-            }
-            previewWindow.remove();
-            console.log('Ventana de previsualización cerrada.');
-        });
-
-        // Hacer la ventana arrastrable
-        let pos1 = 0, pos2 = 0, pos3 = 0, pos4 = 0;
-        previewWindow.onmousedown = dragMouseDown;
-
-        function dragMouseDown(e) {
-            e = e || window.event;
-            e.preventDefault();
-            // obtener la posición del cursor en el inicio:
-            pos3 = e.clientX;
-            pos4 = e.clientY;
-            document.onmouseup = closeDragElement;
-            // llamar a una función cada vez que el cursor se mueve:
-            document.onmousemove = elementDrag;
+            const shareBtn = document.createElement('button');
+            shareBtn.textContent = 'Compartir';
+            shareBtn.onclick = async () => {
+                try {
+                    const blob = await fetch(element.src).then(r => r.blob());
+                    await navigator.share({ files:[new File([blob],fileName,{type:mimeType})], title:'Mi creación desde Experimental Camera' });
+                } catch(e) {}
+            };
+            actions.appendChild(shareBtn);
         }
 
-        function elementDrag(e) {
-            e = e || window.event;
-            e.preventDefault();
-            // calcular la nueva posición del cursor:
-            pos1 = pos3 - e.clientX;
-            pos2 = pos4 - e.clientY;
-            pos3 = e.clientX;
-            pos4 = e.clientY;
-            // establecer la nueva posición del elemento:
-            previewWindow.style.top = (previewWindow.offsetTop - pos2) + "px";
-            previewWindow.style.left = (previewWindow.offsetLeft - pos1) + "px";
-        }
+        const delBtn = document.createElement('button');
+        delBtn.textContent = 'Eliminar';
+        delBtn.onclick = () => { if (clone && type==='video') clone.pause(); win.remove(); container.remove(); };
+        actions.appendChild(delBtn);
+        win.appendChild(actions);
 
-        function closeDragElement() {
-            /* dejar de moverse cuando se suelta el botón del ratón: */
-            document.onmouseup = null;
-            document.onmousemove = null;
-        }
+        closeBtn.addEventListener('click', () => { if (clone && type==='video') clone.pause(); win.remove(); });
+
+        // Drag
+        let px=0,py=0,mx=0,my=0;
+        win.onmousedown = (e) => {
+            e.preventDefault(); mx=e.clientX; my=e.clientY;
+            document.onmouseup   = () => { document.onmouseup=null; document.onmousemove=null; };
+            document.onmousemove = (e) => {
+                px=mx-e.clientX; py=my-e.clientY; mx=e.clientX; my=e.clientY;
+                win.style.top  = (win.offsetTop  - py)+'px';
+                win.style.left = (win.offsetLeft - px)+'px';
+            };
+        };
+        document.body.appendChild(win);
     });
 
-    // 4. Actualizar botones de acción de la galería
-    let actions = document.createElement('div');
+    // Acciones en miniatura
+    const actions = document.createElement('div');
     actions.className = 'gallery-actions';
 
-    let downloadBtn = document.createElement('button');
-    downloadBtn.textContent = 'Descargar';
-    downloadBtn.onclick = () => {
-        const a = document.createElement('a');
-        a.href = element.src;
-        // Usar el título enumerado para el nombre del archivo
-        const extension = type === 'img' ? '.png' : '.webm';
-        a.download = itemTitle.replace(/\s/g, '_') + extension;
-        a.click();
-        console.log('Descargando', type);
-    };
+    const dlBtn = document.createElement('button');
+    dlBtn.textContent = 'Descargar';
+    dlBtn.onclick = () => { const a=document.createElement('a'); a.href=element.src; a.download=fileName; a.click(); };
+    actions.appendChild(dlBtn);
 
-    let shareBtn = document.createElement('button');
-    shareBtn.textContent = 'Compartir';
-    shareBtn.onclick = async () => {
-        if (navigator.share) {
-        try {
-            const file = await fetch(element.src).then(res => res.blob());
-            const fileName = itemTitle.replace(/\s/g, '_') + (type === 'img' ? '.png' : '.webm');
-            const fileType = type === 'img' ? 'image/png' : 'video/webm';
-            const shareData = {
-            files: [new File([file], fileName, { type: fileType })],
-            title: 'Mi creación desde Experimental Camera',
-            text: '¡Echa un vistazo a lo que hice con Experimental Camera!'
-            };
-            await navigator.share(shareData);
-            console.log('Contenido compartido exitosamente');
-        } catch (error) {
-            console.error('Error al compartir:', error);
-        }
-        } else {
-        alert('La API Web Share no es compatible con este navegador.');
-        console.warn('La API Web Share no es compatible.');
-        }
-    };
-
-    let deleteBtn = document.createElement('button');
-    deleteBtn.textContent = 'Eliminar';
-    deleteBtn.onclick = () => {
-        if (type === 'video' && element.src.startsWith('blob:')) {
-        URL.revokeObjectURL(element.src);
-        }
-        container.remove();
-        console.log('Elemento de galería eliminado.');
-    };
-
-    actions.appendChild(downloadBtn);
     if (navigator.share) {
+        const shareBtn = document.createElement('button');
+        shareBtn.textContent = 'Compartir';
+        shareBtn.onclick = async () => {
+            try {
+                const blob = await fetch(element.src).then(r => r.blob());
+                await navigator.share({ files:[new File([blob],fileName,{type:mimeType})], title:'Mi creación desde Experimental Camera' });
+            } catch(e) {}
+        };
         actions.appendChild(shareBtn);
     }
-    actions.appendChild(deleteBtn);
-    container.appendChild(actions);
 
+    const delBtn = document.createElement('button');
+    delBtn.textContent = 'Eliminar';
+    delBtn.onclick = () => { if (type==='video' && element.src.startsWith('blob:')) URL.revokeObjectURL(element.src); container.remove(); };
+    actions.appendChild(delBtn);
+
+    container.appendChild(actions);
     gallery.prepend(container);
 }
 
-
-// --- LÓGICA DE DOBLE TAP/CLICK PARA CAMBIAR DE CÁMARA ---
+// --- CAMBIO DE CÁMARA ---
 let lastTap = 0;
 const DBL_TAP_THRESHOLD = 300;
 
-glcanvas.addEventListener('touchend', (event) => {
-    const currentTime = new Date().getTime();
-    const tapLength = currentTime - lastTap;
-
-    if (tapLength < DBL_TAP_THRESHOLD && tapLength > 0) {
-        event.preventDefault();
-        toggleCamera();
-    }
-    lastTap = currentTime;
+glcanvas.addEventListener('touchend', (e) => {
+    const now = Date.now();
+    const delta = now - lastTap;
+    if (delta < DBL_TAP_THRESHOLD && delta > 0) { e.preventDefault(); toggleCamera(); }
+    lastTap = now;
 }, { passive: false });
 
-glcanvas.addEventListener('dblclick', () => {
-    toggleCamera();
-});
+glcanvas.addEventListener('dblclick', toggleCamera);
 
 function toggleCamera() {
-    if (availableCameraDevices.length > 1) {
-        const currentIdx = availableCameraDevices.findIndex(
-            device => device.deviceId === currentCameraDeviceId
-        );
-        const nextIdx = (currentIdx + 1) % availableCameraDevices.length;
-        const nextDeviceId = availableCameraDevices[nextIdx].deviceId;
-        startCamera(nextDeviceId);
-    } else {
-        alert("Solo hay una cámara disponible.");
-    }
+    if (availableCameraDevices.length < 2) { alert('Solo hay una cámara disponible.'); return; }
+    const idx = availableCameraDevices.findIndex(d => d.deviceId === currentCameraDeviceId);
+    startCamera(availableCameraDevices[(idx+1) % availableCameraDevices.length].deviceId);
 }
 
-function changePaletteIndex() {
-    paletteIndex = (paletteIndex + 1) % palettes.length;
-}
+// --- SWIPE PARA FILTROS ---
+let touchStartX = 0, touchEndX = 0;
+const SWIPE_THRESHOLD = 50;
 
-// --- LÓGICA DE SWIPE PARA CAMBIAR FILTROS ---
-let touchStartX = 0;
-let touchEndX = 0;
-const SWIPE_THRESHOLD = 50; // Pixeles mínimos para considerar un swipe
-
-glcanvas.addEventListener('touchstart', (e) => {
-    touchStartX = e.touches[0].clientX;
-});
-
-glcanvas.addEventListener('touchmove', (e) => {
-    touchEndX = e.touches[0].clientX;
-});
-
-glcanvas.addEventListener('touchend', () => {
-    const diffX = touchEndX - touchStartX;
-
-    if (Math.abs(diffX) > SWIPE_THRESHOLD) {
-        // Obtener todas las opciones, incluyendo las de los optgroups
-        const options = Array.from(filterSelect.querySelectorAll('option')).map(option => option.value);
-        let currentIndex = options.indexOf(selectedFilter);
-
-        if (diffX > 0) { // Swipe a la derecha (filtro anterior)
-            currentIndex = (currentIndex > 0) ? currentIndex - 1 : options.length - 1;
-        } else { // Swipe a la izquierda (filtro siguiente)
-            currentIndex = (currentIndex < options.length - 1) ? currentIndex + 1 : 0;
-        }
-        
-        selectedFilter = options[currentIndex];
-        filterSelect.value = selectedFilter; // Sincroniza el select
+glcanvas.addEventListener('touchstart', (e) => { touchStartX = e.touches[0].clientX; });
+glcanvas.addEventListener('touchmove',  (e) => { touchEndX   = e.touches[0].clientX; });
+glcanvas.addEventListener('touchend',   () => {
+    const diff = touchEndX - touchStartX;
+    if (Math.abs(diff) > SWIPE_THRESHOLD) {
+        const opts = Array.from(filterSelect.querySelectorAll('option')).map(o => o.value);
+        let idx = opts.indexOf(selectedFilter);
+        idx = diff > 0
+            ? (idx > 0 ? idx-1 : opts.length-1)
+            : (idx < opts.length-1 ? idx+1 : 0);
+        selectedFilter = opts[idx];
+        filterSelect.value = selectedFilter;
     }
-    // Reiniciar valores de touch
-    touchStartX = 0;
-    touchEndX = 0;
+    touchStartX = 0; touchEndX = 0;
 });
 
-// --- CORRECCIÓN DE GESTO: EVITAR CAMBIO DE FILTRO POR TAP/CLICK ---
-glcanvas.addEventListener('click', (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-});
+glcanvas.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); });
 
-listCameras();
-
-// --- TUTORIAL DE INICIACIÓN ---
-(function initTutorial() {
+// --- TUTORIAL ---
+(function() {
     const overlay = document.getElementById('tutorial-overlay');
     const skipBtn = document.getElementById('tutorial-skip');
     if (!overlay || !skipBtn) return;
-
-    const TUTORIAL_KEY = 'exp_cam_tutorial_seen';
-    if (localStorage.getItem(TUTORIAL_KEY)) {
-        overlay.style.display = 'none';
-        return;
-    }
-
+    const KEY = 'exp_cam_tutorial_seen';
+    if (localStorage.getItem(KEY)) { overlay.style.display = 'none'; return; }
     skipBtn.addEventListener('click', () => {
         overlay.style.display = 'none';
-        try { localStorage.setItem(TUTORIAL_KEY, '1'); } catch(e) {}
+        try { localStorage.setItem(KEY, '1'); } catch(e) {}
     });
 })();
+
+listCameras();
