@@ -116,7 +116,7 @@ const fsSource = `
     const int FILTER_RECUERDO = 13; // Filtro "Recuerdo" (WebGL puro y post-proceso)
     const int FILTER_GLITCH2 = 14;  // Glitch 2: interferencia intensa rosas y verdes
     const int FILTER_VHS = 15;      // VHS: efecto de cinta de vídeo
-    const int FILTER_GLITCH3 = 16;  // Glitch3: osciladores modulados cruzados (Hydra-style)
+    const int FILTER_GLITCH3 = 16;  // Glitch3: osciladores Hydra-style
 
     // Función para generar ruido básico
     float random(vec2 st) {
@@ -403,104 +403,81 @@ const fsSource = `
 
             finalColor = clamp(colorized, 0.0, 1.0);
         } else if (u_filterType == FILTER_VHS) {
-            vec2 uv = texCoord;
+            // VHS — variables prefijadas con vhs_ para evitar colisión de scope
+            vec2 vhs_uv = texCoord;
+            vec2 vhs_lowRes = vec2(320.0, 240.0);
+            vec2 vhs_pix = (floor(vhs_uv * vhs_lowRes) + 0.5) / vhs_lowRes;
 
-            // 1. Downsampling: reducir resolución efectiva a ~320x240
-            vec2 lowRes = vec2(320.0, 240.0);
-            vec2 pixelated = (floor(uv * lowRes) + 0.5) / lowRes;
+            // Scanlines entrelazadas
+            float vhs_scan = mod(floor(vhs_uv.y * u_resolution.y), 2.0);
+            float vhs_scanF = 1.0 - vhs_scan * 0.18;
 
-            // Scanlines: líneas de escaneo con entrelazado sutil
-            float scanLine = mod(floor(uv.y * u_resolution.y), 2.0);
-            float scanFactor = 1.0 - scanLine * 0.18;
+            // Chroma displacement: R+2px, B-2px
+            float vhs_cs = 2.0 / u_resolution.x;
+            float vhs_r = texture2D(u_image, vec2(vhs_pix.x + vhs_cs, vhs_pix.y)).r;
+            float vhs_g = texture2D(u_image, vhs_pix).g;
+            float vhs_b = texture2D(u_image, vec2(vhs_pix.x - vhs_cs, vhs_pix.y)).b;
+            vec3 vhs_c = vec3(vhs_r, vhs_g, vhs_b);
 
-            // 2. Chroma displacement: desplazar canal R y B 2px a la derecha
-            float chromaShift = 2.0 / u_resolution.x;
-            float r = texture2D(u_image, vec2(pixelated.x + chromaShift, pixelated.y)).r;
-            float g = texture2D(u_image, pixelated).g;
-            float b = texture2D(u_image, vec2(pixelated.x - chromaShift, pixelated.y)).b;
-            vec3 chromaColor = vec3(r, g, b);
+            // Luminance noise en zonas oscuras
+            float vhs_lum = dot(vhs_c, vec3(0.299, 0.587, 0.114));
+            float vhs_grain = random(vhs_uv + vec2(u_time * 0.017, u_time * 0.031)) * 0.12;
+            float vhs_dark = smoothstep(0.5, 0.0, vhs_lum);
+            vhs_c += vhs_grain * vhs_dark;
 
-            // 3. Luminance noise: ruido fino en zonas oscuras
-            float lum = dot(chromaColor, vec3(0.299, 0.587, 0.114));
-            float grain = random(uv + vec2(u_time * 0.017, u_time * 0.031)) * 0.12;
-            float darkMask = smoothstep(0.5, 0.0, lum); // Solo en zonas oscuras
-            chromaColor += grain * darkMask;
-
-            // 4. Tape jitter: distorsión horizontal intermitente por línea
-            float jitterTime = floor(u_time * 15.0);
-            float jitterSeed = random(vec2(floor(uv.y * u_resolution.y * 0.25), jitterTime));
-            float jitterActive = step(0.92, jitterSeed); // Ocurre ~8% del tiempo
-            float jitterAmount = (random(vec2(jitterSeed, jitterTime * 0.1)) - 0.5) * 0.03;
-            vec2 jitteredUV = vec2(pixelated.x + jitterAmount * jitterActive, pixelated.y);
-            jitteredUV = clamp(jitteredUV, 0.0, 1.0);
-            vec3 jitteredColor = vec3(
-                texture2D(u_image, vec2(jitteredUV.x + chromaShift, jitteredUV.y)).r,
-                texture2D(u_image, jitteredUV).g,
-                texture2D(u_image, vec2(jitteredUV.x - chromaShift, jitteredUV.y)).b
+            // Tape jitter intermitente
+            float vhs_jt = floor(u_time * 15.0);
+            float vhs_js = random(vec2(floor(vhs_uv.y * u_resolution.y * 0.25), vhs_jt));
+            float vhs_ja = step(0.92, vhs_js);
+            float vhs_jamt = (random(vec2(vhs_js, vhs_jt * 0.1)) - 0.5) * 0.03;
+            vec2 vhs_juv = clamp(vec2(vhs_pix.x + vhs_jamt * vhs_ja, vhs_pix.y), 0.0, 1.0);
+            vec3 vhs_jc = vec3(
+                texture2D(u_image, vec2(vhs_juv.x + vhs_cs, vhs_juv.y)).r,
+                texture2D(u_image, vhs_juv).g,
+                texture2D(u_image, vec2(vhs_juv.x - vhs_cs, vhs_juv.y)).b
             );
-            chromaColor = mix(chromaColor, jitteredColor, jitterActive);
+            vhs_c = mix(vhs_c, vhs_jc, vhs_ja);
+            finalColor = clamp(vhs_c * vhs_scanF, 0.0, 1.0);
 
-            // Aplicar scanlines
-            finalColor = clamp(chromaColor * scanFactor, 0.0, 1.0);
         } else if (u_filterType == FILTER_GLITCH3) {
-            vec2 uv = texCoord;
+            // Glitch3 — Hydra-style, variables prefijadas con g3_
+            vec2 g3_uv = texCoord;
 
-            // --- o1: osc(20,0.2,0).color(2,0.7,0.1).mult(osc(40)).modulateRotate(o0,0.2).rotate(0.2) ---
-            // Primero construimos o0 base y luego o1, y los combinamos con diff.
+            // o0: osc(18,0.1).color(2,0.1,2).mult(osc(20,0.01)).repeat(2,20).rotate(0.5)
+            float g3_cosA = cos(0.5);
+            float g3_sinA = sin(0.5);
+            vec2 g3_r0 = g3_uv - 0.5;
+            g3_r0 = vec2(g3_cosA*g3_r0.x - g3_sinA*g3_r0.y, g3_sinA*g3_r0.x + g3_cosA*g3_r0.y) + 0.5;
+            vec2 g3_rep = fract(g3_r0 * vec2(2.0, 20.0));
 
-            // Helper: rotar coordenadas alrededor del centro
-            float cosA0 = cos(0.5);
-            float sinA0 = sin(0.5);
-            vec2 uvR0 = uv - 0.5;
-            uvR0 = vec2(cosA0 * uvR0.x - sinA0 * uvR0.y, sinA0 * uvR0.x + cosA0 * uvR0.y) + 0.5;
+            // modulate con video como proxy de o1
+            vec4 g3_mod = texture2D(u_image, g3_uv);
+            vec2 g3_m = fract(g3_rep + g3_mod.rg * 0.08);
 
-            // o0: osc(18,0.1,0) — onda sinusoidal horizontal
-            float osc0 = sin(uvR0.x * 18.0 + u_time * 0.1) * 0.5 + 0.5;
-            // .color(2,0.1,2) — tinte magenta intenso
-            vec3 col0 = vec3(osc0 * 2.0, osc0 * 0.1, osc0 * 2.0);
+            // scale vertical dinámica (simula fft[0])
+            float g3_sy = sin(u_time * 1.3) * 0.45 + 2.0;
+            vec2 g3_sc = vec2(g3_m.x, (g3_m.y - 0.5) / g3_sy + 0.5);
 
-            // .mult(osc(20,0.01,0)) — multiplicar por otra onda
-            float osc0b = sin(uvR0.x * 20.0 + u_time * 0.01) * 0.5 + 0.5;
-            col0 *= osc0b;
+            float g3_o0a = sin(g3_sc.x * 18.0 + u_time * 0.1) * 0.5 + 0.5;
+            float g3_o0b = sin(g3_r0.x * 20.0 + u_time * 0.01) * 0.5 + 0.5;
+            vec3 g3_o0 = vec3(g3_o0a*2.0, g3_o0a*0.1, g3_o0a*2.0) * g3_o0b;
 
-            // .repeat(2,20) — tiling 2x horizontal, 20x vertical
-            vec2 uvRep = fract(uvR0 * vec2(2.0, 20.0));
+            // o1: osc(20,0.2).color(2,0.7,0.1).mult(osc(40)).modulateRotate(o0,0.2).rotate(0.2)
+            float g3_o0lum = dot(g3_o0, vec3(0.299, 0.587, 0.114));
+            float g3_rot = g3_o0lum * 0.2;
+            float g3_cR = cos(g3_rot); float g3_sR = sin(g3_rot);
+            float g3_cA1 = cos(0.2 + u_time * 0.05); float g3_sA1 = sin(0.2 + u_time * 0.05);
+            vec2 g3_r1 = g3_uv - 0.5;
+            g3_r1 = vec2(g3_cR*g3_r1.x - g3_sR*g3_r1.y, g3_sR*g3_r1.x + g3_cR*g3_r1.y);
+            g3_r1 = vec2(g3_cA1*g3_r1.x - g3_sA1*g3_r1.y, g3_sA1*g3_r1.x + g3_cA1*g3_r1.y) + 0.5;
+            float g3_o1a = sin(g3_r1.x * 20.0 + u_time * 0.2) * 0.5 + 0.5;
+            float g3_o1b = sin(g3_r1.x * 40.0 + u_time * 0.3) * 0.5 + 0.5;
+            vec3 g3_o1 = vec3(g3_o1a*2.0, g3_o1a*0.7, g3_o1a*0.1) * g3_o1b;
 
-            // .modulate(o1) — modulación de posición con output anterior (usamos video como proxy)
-            vec4 modSample = texture2D(u_image, uv);
-            vec2 uvMod = fract(uvRep + modSample.rg * 0.08);
-
-            // .scale(1, fft[0]*0.9+2) — escala vertical dinámica con tiempo
-            float scaleY = sin(u_time * 1.3) * 0.45 + 2.0; // simula fft[0] oscilando
-            vec2 uvScaled = uvMod;
-            uvScaled.y = (uvScaled.y - 0.5) / scaleY + 0.5;
-
-            float osc0_final = sin(uvScaled.x * 18.0 + u_time * 0.1) * 0.5 + 0.5;
-            vec3 o0_color = vec3(osc0_final * 2.0, osc0_final * 0.1, osc0_final * 2.0) * osc0b;
-
-            // --- o1: osc(20,0.2,0).color(2,0.7,0.1).mult(osc(40)).modulateRotate(o0,0.2).rotate(0.2) ---
-            float cosA1 = cos(0.2 + u_time * 0.05);
-            float sinA1 = sin(0.2 + u_time * 0.05);
-            vec2 uvR1 = uv - 0.5;
-            // modulateRotate con o0: rotar según luminancia de o0
-            float o0lum = dot(o0_color, vec3(0.299, 0.587, 0.114));
-            float rotAngle = o0lum * 0.2;
-            float cR = cos(rotAngle); float sR = sin(rotAngle);
-            uvR1 = vec2(cR * uvR1.x - sR * uvR1.y, sR * uvR1.x + cR * uvR1.y);
-            uvR1 = vec2(cosA1 * uvR1.x - sinA1 * uvR1.y, sinA1 * uvR1.x + cosA1 * uvR1.y) + 0.5;
-
-            float osc1a = sin(uvR1.x * 20.0 + u_time * 0.2) * 0.5 + 0.5;
-            float osc1b = sin(uvR1.x * 40.0 + u_time * 0.3) * 0.5 + 0.5;
-            vec3 o1_color = vec3(osc1a * 2.0, osc1a * 0.7, osc1a * 0.1) * osc1b;
-
-            // .diff(o1) — diferencia absoluta entre o0 y o1
-            vec3 diffColor = abs(o0_color - o1_color);
-
-            // Mezclar con el video original para mantener la imagen reconocible
-            vec4 camColor = texture2D(u_image, uv);
-            vec3 blended = mix(camColor.rgb, diffColor, 0.72);
-
-            finalColor = clamp(blended, 0.0, 1.0);
+            // diff(o1) mezclado con cámara
+            vec3 g3_diff = abs(g3_o0 - g3_o1);
+            vec4 g3_cam = texture2D(u_image, g3_uv);
+            finalColor = clamp(mix(g3_cam.rgb, g3_diff, 0.72), 0.0, 1.0);
         }
 
         gl_FragColor = vec4(finalColor, alpha);
@@ -807,9 +784,9 @@ function drawVideoFrame() {
     const currentTime = performance.now() / 1000.0;
     gl.uniform1f(timeLocation, currentTime);
 
-    // Cámara frontal: sin espejo adicional (el stream frontal ya es correcto). Trasera: espejo horizontal.
+    // Cámara frontal: espejo horizontal para imagen natural. Trasera: sin espejo.
     const isFront = (currentFacingMode === 'user' || currentFacingMode === 'unknown');
-    gl.uniform1f(flipXLocation, isFront ? 1.0 : -1.0);
+    gl.uniform1f(flipXLocation, isFront ? -1.0 : 1.0);
 
     // Los filtros eliminados se quitan de la lista de MediaPipe
     const isMediaPipeFilter = ['whiteGlow', 'blackBg', 'whiteBg', 'blur', 'static-silhouette', 'echo-visual'].includes(selectedFilter);
@@ -817,8 +794,12 @@ function drawVideoFrame() {
     if (isMediaPipeFilter && mpResults && mpResults.segmentationMask && mpResults.image) {
         // Renderizar con MediaPipe en el canvas 2D auxiliar
 
-        // El espejo horizontal se maneja a nivel WebGL via u_flipX para ambos paths
+        // Espejo horizontal para cámara frontal en el canvas 2D
         mpCanvasCtx.save();
+        if (isFront) {
+            mpCanvasCtx.translate(canvas.width, 0);
+            mpCanvasCtx.scale(-1, 1);
+        }
 
         let postProcessFilterIndex = 0; // Por defecto: FILTER_NONE
 
