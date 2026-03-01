@@ -115,6 +115,7 @@ const fsSource = `
     const int FILTER_FISHEYE = 12;
     const int FILTER_RECUERDO = 13; // Filtro "Recuerdo" (WebGL puro y post-proceso)
     const int FILTER_GLITCH2 = 14;  // Glitch 2: interferencia intensa rosas y verdes
+    const int FILTER_VHS = 15;      // VHS: efecto de cinta de vídeo
 
     // Función para generar ruido básico
     float random(vec2 st) {
@@ -400,7 +401,46 @@ const fsSource = `
             colorized = mix(colorized, vec3(1.0), flash * 0.5);
 
             finalColor = clamp(colorized, 0.0, 1.0);
-        }
+        } else if (u_filterType == FILTER_VHS) {
+            vec2 uv = texCoord;
+
+            // 1. Downsampling: reducir resolución efectiva a ~320x240
+            vec2 lowRes = vec2(320.0, 240.0);
+            vec2 pixelated = (floor(uv * lowRes) + 0.5) / lowRes;
+
+            // Scanlines: líneas de escaneo con entrelazado sutil
+            float scanLine = mod(floor(uv.y * u_resolution.y), 2.0);
+            float scanFactor = 1.0 - scanLine * 0.18;
+
+            // 2. Chroma displacement: desplazar canal R y B 2px a la derecha
+            float chromaShift = 2.0 / u_resolution.x;
+            float r = texture2D(u_image, vec2(pixelated.x + chromaShift, pixelated.y)).r;
+            float g = texture2D(u_image, pixelated).g;
+            float b = texture2D(u_image, vec2(pixelated.x - chromaShift, pixelated.y)).b;
+            vec3 chromaColor = vec3(r, g, b);
+
+            // 3. Luminance noise: ruido fino en zonas oscuras
+            float lum = dot(chromaColor, vec3(0.299, 0.587, 0.114));
+            float grain = random(uv + vec2(u_time * 0.017, u_time * 0.031)) * 0.12;
+            float darkMask = smoothstep(0.5, 0.0, lum); // Solo en zonas oscuras
+            chromaColor += grain * darkMask;
+
+            // 4. Tape jitter: distorsión horizontal intermitente por línea
+            float jitterTime = floor(u_time * 15.0);
+            float jitterSeed = random(vec2(floor(uv.y * u_resolution.y * 0.25), jitterTime));
+            float jitterActive = step(0.92, jitterSeed); // Ocurre ~8% del tiempo
+            float jitterAmount = (random(vec2(jitterSeed, jitterTime * 0.1)) - 0.5) * 0.03;
+            vec2 jitteredUV = vec2(pixelated.x + jitterAmount * jitterActive, pixelated.y);
+            jitteredUV = clamp(jitteredUV, 0.0, 1.0);
+            vec3 jitteredColor = vec3(
+                texture2D(u_image, vec2(jitteredUV.x + chromaShift, jitteredUV.y)).r,
+                texture2D(u_image, jitteredUV).g,
+                texture2D(u_image, vec2(jitteredUV.x - chromaShift, jitteredUV.y)).b
+            );
+            chromaColor = mix(chromaColor, jitteredColor, jitterActive);
+
+            // Aplicar scanlines
+            finalColor = clamp(chromaColor * scanFactor, 0.0, 1.0);
 
         gl_FragColor = vec4(finalColor, alpha);
     }
@@ -706,22 +746,18 @@ function drawVideoFrame() {
     const currentTime = performance.now() / 1000.0;
     gl.uniform1f(timeLocation, currentTime);
 
-    // Cámara frontal: mostrar sin espejo (natural). Trasera: espejo horizontal.
+    // Cámara frontal: aplicar espejo para que la imagen sea especular (natural para el usuario). Trasera: sin espejo.
     const isFront = (currentFacingMode === 'user' || currentFacingMode === 'unknown');
-    gl.uniform1f(flipXLocation, isFront ? 1.0 : -1.0);
+    gl.uniform1f(flipXLocation, isFront ? -1.0 : 1.0);
 
     // Los filtros eliminados se quitan de la lista de MediaPipe
-    const isMediaPipeFilter = ['whiteGlow', 'blackBg', 'whiteBg', 'invisible', 'static-silhouette', 'echo-visual'].includes(selectedFilter);
+    const isMediaPipeFilter = ['whiteGlow', 'blackBg', 'whiteBg', 'blur', 'static-silhouette', 'echo-visual'].includes(selectedFilter);
 
     if (isMediaPipeFilter && mpResults && mpResults.segmentationMask && mpResults.image) {
         // Renderizar con MediaPipe en el canvas 2D auxiliar
 
-        // Espejo horizontal para cámara frontal en el canvas 2D
+        // El espejo horizontal se maneja a nivel WebGL via u_flipX para ambos paths
         mpCanvasCtx.save();
-        if (isFront) {
-            mpCanvasCtx.translate(canvas.width, 0);
-            mpCanvasCtx.scale(-1, 1);
-        }
 
         let postProcessFilterIndex = 0; // Por defecto: FILTER_NONE
 
@@ -765,7 +801,7 @@ function drawVideoFrame() {
                 break;
             }
 
-            case "invisible": { // Invisible: camufla la silueta con el entorno difuminado
+            case "blur": { // Blur: camufla la silueta con el entorno difuminado
                 mpCanvasCtx.clearRect(0, 0, canvas.width, canvas.height);
 
                 // 1. Dibujar la imagen completa del video
@@ -904,6 +940,7 @@ function drawVideoFrame() {
             case 'fisheye': filterIndex = 12; break;
             case 'recuerdo': filterIndex = 13; break;
             case 'glitch2': filterIndex = 14; break;
+            case 'vhs': filterIndex = 15; break;
             default: filterIndex = 0; break;
         }
         gl.uniform1i(filterTypeLocation, filterIndex);
