@@ -659,15 +659,23 @@ captureBtn.addEventListener('click', () => {
     img.onload = () => addToGallery(img, 'img');
 });
 
+let recordStream = null;
+
 recordBtn.addEventListener('click', () => {
     if (isRecording) return;
     chunks = [];
-    const streamToRecord = glcanvas.captureStream();
+
+    // FPS fijo: evita que el encoder acople su ritmo al bucle de render
+    recordStream = glcanvas.captureStream(30);
     const audioTracks = currentStream.getAudioTracks();
-    if (audioTracks.length > 0) streamToRecord.addTrack(audioTracks[0]);
-    mediaRecorder = new MediaRecorder(streamToRecord, { mimeType: 'video/webm; codecs=vp8' });
+    if (audioTracks.length > 0) recordStream.addTrack(audioTracks[0]);
+
+    mediaRecorder = new MediaRecorder(recordStream, { mimeType: 'video/webm; codecs=vp8' });
     mediaRecorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
     mediaRecorder.onstop = () => {
+        // Liberar todos los tracks del stream de grabación al terminar
+        recordStream.getTracks().forEach(t => t.stop());
+        recordStream = null;
         const url = URL.createObjectURL(new Blob(chunks, { type: 'video/webm' }));
         const vid = document.createElement('video');
         vid.src = url; vid.controls = true;
@@ -688,6 +696,8 @@ pauseBtn.addEventListener('click', () => {
 stopBtn.addEventListener('click', () => {
     mediaRecorder.stop();
     isRecording = false;
+    isPaused = false;
+    pauseBtn.textContent = 'Pausa';
     controls.style.display = 'flex';
     recordingControls.style.display = 'none';
 });
